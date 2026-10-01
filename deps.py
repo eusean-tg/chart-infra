@@ -11,7 +11,7 @@ from common import STATE, guard, lock, load, save, run
 from sources import valid_name
 
 IMAGE_TAG = 'chart-infra-node:24.20.0-pnpm11.28.2'
-SERVICES = ('auth-service-backend', 'tharamine-user-service', 'orange-v2-backend', 'kiyotaka-frontend', 'script-migration')
+SERVICES = ('auth-service-backend', 'tharamine-user-service', 'orange-v2-backend', 'kiyotaka-frontend')
 
 
 def install(profile, workspace, service):

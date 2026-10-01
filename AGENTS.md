@@ -1,23 +1,32 @@
-# chart-infra
+# Chart-infra agent instructions
 
-This standalone project owns the shared chart frontend/backend development infrastructure. Read README.md and docs/DEPLOYMENT.md first; docs/design contains the earlier Obsidian handoff and review.
+Read [README.md](README.md) and [docs/OPERATIONS.md](docs/OPERATIONS.md). Use [docs/AGENT-ONBOARDING.md](docs/AGENT-ONBOARDING.md) for source synchronization and development configuration imports. The reusable agent entry point is [skills/chart-infra/SKILL.md](skills/chart-infra/SKILL.md).
 
-- Work only on the registered shared development PC/cluster. Every mutating command uses common.guard() and its lifecycle lock. Never use production credentials or target production.
-- Keep deployment, source synchronization/fetching and live capture separate. No vendor collectors, metadata refresh or history fetching by default. Future capture needs a cluster-enforced deadline.
-- Keep new endpoints Tailscale-only. Preserve the unrelated Go pipeline, existing Traefik, Minecraft and Syncthing.
-- No CPU/memory requests or limits. HDD volume capacity metadata and explicit database cache tuning are separate.
-- All data persists through teardown. Do not delete data, identities, PVs or PVCs without a specific user instruction naming the target. Refuse missing/replaced HDD or volume identities. Never initialize a replacement dataset during up.
-- Credentials/private keys belong in private local state and the protected HDD identity directory, never source, logs, documentation or source sync.
-- Do not automatically regenerate existing keys/users or reconfigure an existing replica set. Pin and verify exact image digests.
-- Final 2026-10-01 decision: ONE Mongo data-bearing member per profile, rs0, keyfile auth, no Mongo TLS/CA/SRV/split horizons. Laptops use IP:port with directConnection=true; Pods use replicaSet=rs0 and cluster DNS. API DNS is a separate decision.
-- Generic Mongo lifecycle, Sean’s offline frontend-backend pilot, HDD source/dependency relocation, explicit app source/dependency selection and Mutagen-over-SSH source registration/checkpoints are implemented. Source fetching, sync, frozen dependency installation and deployment remain separate commands. The agent-first source-sync runbook is docs/AGENT-ONBOARDING.md; discover paths explicitly, never assume ~/workspace or overwrite an existing sync configuration. Real Mac setup/first sync/freeze and PC activation of clean laptop source have passed; the laptop agent reports actual Mac-to-backend hot reload passed. The later laptop handoff records real Tailscale recovery and Sean-reported frontend sign-in/save/reload success. Developer account/RBAC provisioning and named-dataset switching remain unimplemented. Two Mongo profiles were tested; only one full app profile was tested.
-- retired/ and the original Fable review are historical. Never run retired pilot scripts or restore their old requirements as current intent.
-- Record client checks as user-reported, and never label PC-side driver results as actual Compass verification.
+## Operating boundaries
 
-- Backend checkouts, source mirrors and Linux dependency caches now belong on the verified HDD under the profile root. Retain retired Syncthing identity/config/PVs/PVCs separately for rollback. Source selection requires stopped apps and a laptop freeze checkpoint (flush, pause owned Mutagen sessions, compare fingerprints). Do not edit laptop-owned mirrors. Existing OpenScape Syncthing is unchanged.
+- Target only the registered shared development PC and cluster. Preserve host, HDD, ownership, data-marker and volume-UID checks. Use the corresponding lifecycle locks for mutations.
+- Pass `--profile` explicitly. Run source-sync operations as the profile's registered Linux owner. Developer account and scoped Kubernetes-access provisioning require separate operator work; do not distribute another user's SSH credentials or cluster-admin kubeconfig.
+- Keep source fetching, source synchronization, dependency installation, configuration selection and deployment separate. Do not start vendor collectors, metadata refreshes or history downloads. Any future live capture needs a cluster-enforced deadline.
+- Keep endpoints Tailscale-only and preserve unrelated workloads, the Go pipeline, existing ingress and other synchronization tools.
+- Configure no CPU/memory requests, limits or namespace resource quotas. Storage capacity metadata and explicit database cache tuning are separate.
+- Retain data, identities, imports, source, caches, PVs and PVCs through teardown. Delete none without an explicit instruction naming the target. Never initialize replacement data during startup or bypass a missing/replaced disk, marker or volume guard.
+- Preserve existing keys, database users and replica-set identity. Do not force-reconfigure Mongo or rotate development identities as a troubleshooting shortcut. Pin image digests and review runtime/dependency identity together.
+- Use one Mongo data-bearing member per profile, replica set `rs0`, keyfile authentication and profile/service-specific users. Laptops use IP:port with `directConnection=true`; Pods use cluster DNS and `replicaSet=rs0`. API-hostname DNS is independent of Mongo.
 
-- Mutagen 0.18.1 is pinned for this implementation. sync.py is the current PC mirror/checkpoint interface; laptop-sync.py owns exact session IDs on the laptop. syncthing_legacy.py is a guarded retirement/rollback adapter, not a current startup interface. Do not restart two transfer engines against the same roots. Source policy is sync_common.py; unexpected included symlinks fail validation, the known root CLAUDE.md alias is excluded. The PC-only SSH fixture passed; Sean now runs clean laptop mirrors. Mutagen is resumed; laptop-reported transfer/watcher acceptance passed. Do not require/apply the retired Tharamine patch; retain external integration settings and network restrictions. See the latest DEPLOYMENT.md entry.
+## Source and configuration
 
-- Developer `.env.local` import is allowed through the agent procedure in docs/AGENT-ONBOARDING.md sections 7–8. Do not add an import script, sync private files or replace config wholesale. Review/merge into protected canonical per-service config, retain backups/identities, and select a new generated config where needed; keep existing offline/no-production constraints. Document recurring onboarding issues there.
+- Keep backend checkouts, mirrors and Linux dependency caches on the verified HDD. Do not edit laptop-owned mirrors or apply local backend patches.
+- Use the matching `laptop-sync.py` and `sync_common.py` with the pinned Mutagen version. Discover laptop paths explicitly. Preserve unrelated sessions and synchronization configurations; operate only on recorded owned session IDs.
+- Freeze laptop sessions before installing dependencies or selecting synced source. A valid freeze flushes, pauses owned sessions and verifies matching fingerprints. Plain pause is insufficient. Do not forge checkpoints or resume through raw Mutagen commands.
+- Keep runtime source, dependency and configuration mounts read-only. Use explicit workspace selection while apps are stopped; retain prior generations for rollback.
+- Keep private keys, tokens, dotenv files, connection URIs and runtime evidence outside Git and source synchronization. Never print secret values or raw private config diffs.
+- Permit development `.env.local` imports through the agent procedure in the onboarding guide. Do not add an importer script or replace runtime config wholesale. Preserve profile endpoints, identities and offline restrictions; retain private backups and verify the requested feature.
+- Leave Mutagen daemon login registration opt-in. Coordinate daemon-wide operations with every workflow using that daemon. Do not silently change automatic startup preferences.
 
-- Sean chose on-demand Mutagen daemon startup, without launchd registration. After reboot/login: connect Tailscale, run laptop `chart_sync status`, then `chart_sync wait`; intentionally paused/frozen sessions remain paused. Optional per-user registration/versioned-path upgrade guidance is in docs/AGENT-ONBOARDING.md. Do not change daemon registration or shared workflows implicitly.
+## Documentation and verification
+
+- Apply `definitive-docs` to maintained prose and comments. State verified behavior and concrete limits; keep rollout narration out of operating reference.
+- Keep reusable chart-infra instructions in this repository. Put host-specific inventory, troubleshooting investigations, reviews, acceptance evidence and roadmap items in `/home/sean/obsidian/vault/Chart Infra/`, following its index and knowledge-base conventions.
+- Record automated, agent-observed and developer-reported checks distinctly. PC driver results do not establish actual laptop Compass or browser acceptance.
+- Run checks appropriate to the changed behavior. Inspect integration-test scope before execution: some tests write fixture records or create cluster objects. Never reset source or production-like datasets to make a test pass.
+- Keep named datasets, Linux-account/RBAC provisioning and second full-profile acceptance explicitly unimplemented until their code and verification exist.

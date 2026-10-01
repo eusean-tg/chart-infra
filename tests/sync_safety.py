@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -61,6 +62,14 @@ class Safety(unittest.TestCase):
  def test_current_policy_upgrade_is_noop(self):
   with patch.object(sync,'inventory',return_value={'policy':POLICY,'policy_hash':policy_hash()}),patch.object(sync.mongo,'write_json') as write:
    self.assertFalse(sync.upgrade_policy()['changed']);write.assert_not_called()
+ def test_unconverted_syncthing_inventory_blocks_new_mirror(self):
+  legacy=self.root/'.local/share/chart-infra/sync/test/inventory.json'
+  legacy.parent.mkdir(parents=True);legacy.write_text('{}')
+  with patch.object(sync.mongo,'inventory'),patch.object(sync.mongo,'PROFILE','test'),patch.object(sync,'statepath',return_value=self.root/'source-sync.json'),patch.object(sync.Path,'home',return_value=self.root),patch.object(sync.pwd,'getpwuid',return_value=SimpleNamespace(pw_name='test')),patch.object(sync.mongo,'write_json') as write:
+   with self.assertRaisesRegex(SystemExit,'explicit migration plan'):
+    sync.prepare('laptop')
+   write.assert_not_called()
+   self.assertEqual(legacy.read_text(),'{}')
  def test_bad_known_alias(self):
   p=Path(self.paths['auth']);(p/'CLAUDE.md').symlink_to('/etc/passwd')
   with self.assertRaises(ValueError):manifest(p)

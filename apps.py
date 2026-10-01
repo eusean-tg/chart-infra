@@ -335,9 +335,6 @@ def down(data_only=False):
     for svc in ['orange','tharamine','auth','redis']:
         run(['kubectl','-n',mongo.NS,'wait','--for=delete','pod','-l','chart-app='+svc,'--timeout=90s'])
     if data_only:
-        for name in ['chart-fixture-dry','chart-fixture-live']:
-            old=mongo.kget('job',name);mongo.owned(old)
-            if old: run(['kubectl','-n',mongo.NS,'delete','job',name])
         for o in manifests(inv):
             if o['kind'] in ['Deployment','Service','NetworkPolicy']:
                 old=mongo.kget(o['kind'],o['metadata']['name']);mongo.owned(old)

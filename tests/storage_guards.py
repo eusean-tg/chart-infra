@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise startup guards against disposable fake mounts, never live Mongo files."""
 import importlib.util
+import argparse
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 spec = importlib.util.spec_from_file_location('mongo_pilot', Path(__file__).resolve().parents[1] / 'mongo.py')
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--profile', required=True, help='Prepared profile whose Mongo startup guards to test')
+args = parser.parse_args()
+m.configure(args.profile)
 m.guard()
 inv = m.inventory()
 script = next(o for o in m.manifests(inv) if o['kind'] == 'ConfigMap')['data']['start.sh']

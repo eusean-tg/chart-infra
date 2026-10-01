@@ -69,7 +69,7 @@ def upgrade_policy():
     return {'policy':POLICY,'policy_hash':policy_hash(),'changed':True,'previous_inventory':str(receipt)}
 
 
-def prepare(workspace,adopt=False):
+def prepare(workspace):
     mongo.inventory()
     if statepath().exists():
         inv=inventory()
@@ -78,31 +78,17 @@ def prepare(workspace,adopt=False):
     if mongo.PROFILE!=pwd.getpwuid(os.getuid()).pw_name:
         raise SystemExit('Provision the developer Linux account/scoped access first; prepare as that profile owner')
     legacy=Path.home()/'.local/share/chart-infra/sync'/mongo.PROFILE/'inventory.json'
+    if legacy.exists():
+        raise SystemExit('Retained Syncthing inventory requires an explicit migration plan; refusing a second transfer engine')
     inv={'transport':'mutagen-ssh','profile':mongo.PROFILE,'workspace':workspace,
          'uid':os.getuid(),'gid':os.getgid(),'owner':pwd.getpwuid(os.getuid()).pw_name,
          'registration':secrets.token_hex(24),'policy':POLICY,'policy_hash':policy_hash(),
          'version':VERSION,'folders':{},'volume_uids':{},'frozen':False}
-    if legacy.exists():
-        if not adopt:raise SystemExit('Existing Syncthing state: use explicit --adopt-syncthing migration')
-        import syncthing_legacy as old
-        prior=old.inventory()
-        if prior['workspace']!=workspace or prior.get('peer'):raise SystemExit('Paired/different legacy workspace requires separate migration review')
-        for f in prior['folders'].values():
-            p=Path(f['host_path'])
-            if {x.name for x in p.iterdir()}-{'.stfolder','.stignore','node_modules'} or (p/'node_modules').exists() and any((p/'node_modules').iterdir()):
-                raise SystemExit('Populated legacy mirror: inspect before adoption')
-        save(f'profiles/{mongo.PROFILE}/syncthing-before-mutagen.json',prior)
-        old.down(data_only=True)
-        inv['volume_uids']=prior['volume_uids'].copy()
-        inv['legacy_identity_retained']=str(legacy)
-        inv['folders']={s:{'repo':f['repo'],'host_path':f['host_path'],'claim':f['claim']} for s,f in prior['folders'].items()}
-    else:
-        if adopt:raise SystemExit('No legacy Syncthing inventory to adopt')
-        base=mongo.BASE/'source/mirrors'/workspace
-        if base.exists() or base.resolve()!=base:raise SystemExit('Refusing existing or symlinked mirror destination')
-        for svc,repo in REPOS.items():
-            dest=base/repo;dest.mkdir(parents=True,mode=0o700)
-            inv['folders'][svc]={'repo':repo,'host_path':str(dest),'claim':'source-'+workspace+'-'+svc}
+    base=mongo.BASE/'source/mirrors'/workspace
+    if base.exists() or base.resolve()!=base:raise SystemExit('Refusing existing or symlinked mirror destination')
+    for svc,repo in REPOS.items():
+        dest=base/repo;dest.mkdir(parents=True,mode=0o700)
+        inv['folders'][svc]={'repo':repo,'host_path':str(dest),'claim':'source-'+workspace+'-'+svc}
     for svc,f in inv['folders'].items():
         root=Path(f['host_path']);f['marker']=secrets.token_hex(24)+'\n'
         marker=root/'.chart-sync-root'
@@ -191,9 +177,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('action',choices=['prepare','upgrade-policy','export','status','register','checkpoint','invalidate'])
     p.add_argument('--profile',type=valid_name,default='sean');p.add_argument('--workspace',type=valid_name,default='laptop')
-    p.add_argument('--adopt-syncthing',action='store_true')
     a=p.parse_args()
-    if a.adopt_syncthing and a.action!='prepare':p.error('--adopt-syncthing is only for prepare')
     read_only=a.action in ('export','status')
     # Reads still verify cluster/HDD/volume ownership. They do not mutate a
     # selection, so must not wait behind installs or rollout lifecycle locks.
@@ -205,7 +189,7 @@ def main():
         mh=lock('chart-mongo-'+a.profile)
         sh=lock('chart-sync-'+a.profile)
     mongo.configure(a.profile)
-    if a.action=='prepare':prepare(a.workspace,a.adopt_syncthing);return
+    if a.action=='prepare':prepare(a.workspace);return
     if a.action=='upgrade-policy':result=upgrade_policy()
     elif a.action=='export':result=export()
     elif a.action=='status':

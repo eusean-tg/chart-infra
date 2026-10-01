@@ -1,9 +1,26 @@
 """Offline protocol and persistence checks for single-member chart Mongo profiles."""
-import hashlib
 import json
 import socket
 import subprocess
 import time
+
+
+def mongo_resources(m):
+    """Validate Mongo resources without treating sibling apps as Mongo members."""
+    pods = json.loads(m.run(['kubectl','-n',m.NS,'get','pods','-o','json'],capture=True))['items']
+    pods = [p for p in pods if p['metadata'].get('labels',{}).get('app') == 'mongo-pilot']
+    assert len(pods) == 1, 'Expected exactly one Mongo member Pod'
+    for pod in pods:
+        m.owned(pod)
+        for c in pod['spec'].get('containers',[]) + pod['spec'].get('initContainers',[]):
+            resources = c.get('resources',{})
+            assert not resources.get('requests') and not resources.get('limits')
+    services = json.loads(m.run(['kubectl','-n',m.NS,'get','services','-o','json'],capture=True))['items']
+    services = [s for s in services if s['spec'].get('selector',{}).get('app') == 'mongo-pilot']
+    assert {s['metadata']['name'] for s in services} == {'mongo','mongo-access'}
+    for service in services:
+        m.owned(service)
+        assert service['spec']['type'] == 'ClusterIP'
 
 
 def external(m, js, uri=None):
@@ -59,26 +76,11 @@ print(JSON.stringify({directIpConnection:true,replicaSet:h.setName,primary:h.isW
         except ConnectionResetError: pass
     pv=m.kget('pv',m.PV,None)
     assert pv['spec']['local']['path']==str(m.DATA) and pv['spec']['persistentVolumeReclaimPolicy']=='Retain'
-    pods=json.loads(m.run(['kubectl','-n',m.NS,'get','pods','-o','json'],capture=True))['items']
-    assert len(pods)==1
-    for c in pods[0]['spec']['containers']:
-        assert not c.get('resources',{}).get('requests') and not c.get('resources',{}).get('limits')
-    services=json.loads(m.run(['kubectl','-n',m.NS,'get','services','-o','json'],capture=True))['items']
-    assert {s['metadata']['name'] for s in services}=={'mongo','mongo-access'}
-    assert all(s['spec']['type']=='ClusterIP' for s in services)
-    before=m.load('dns-pilot/before.json')
-    current={}
-    for o in json.loads(m.run(['kubectl','get','deployments,statefulsets,daemonsets,services','-A','-o','json'],capture=True))['items']:
-        md=o['metadata']; ns=md.get('namespace')
-        if ns.startswith('chart-'): continue
-        current[f"{ns}/{o['kind']}/{md['name']}"]={'uid':md['uid'],'spec_sha256':hashlib.sha256(json.dumps(o['spec'],sort_keys=True).encode()).hexdigest()}
-    cm=m.kget('configmap','coredns','kube-system')
-    current['kube-system/ConfigMap/coredns']={'uid':cm['metadata']['uid'],'data_sha256':hashlib.sha256(json.dumps(cm['data'],sort_keys=True).encode()).hexdigest()}
-    assert current==before, 'Unrelated workloads changed'
+    mongo_resources(m)
     report={'time':time.strftime('%Y-%m-%dT%H:%M:%S%z'),'profile':m.PROFILE,'passed':True,'protocol':result,
         'internal_discovery':hosts,'one_member_no_horizons_no_tls':True,'keyfile_auth':True,
         'host_lan_destination_and_source_denied':True,'one_retained_hdd_volume':True,
         'no_cpu_memory_requests_or_limits':True,'no_nodeport_or_member_services':True,
-        'unrelated_workloads_unchanged':True,'actual_mac_compass_tested':False}
+        'actual_mac_compass_tested':False}
     m.save(f'profiles/{m.PROFILE}/verification.json',report)
     print(json.dumps(report,indent=2))

@@ -5,7 +5,6 @@ import json
 import os
 from pathlib import Path
 import re
-import subprocess
 import shutil
 import hashlib
 
@@ -50,13 +49,6 @@ def prepare(profile, workspace):
         revision = run(['git', '-C', str(path), 'rev-parse', 'HEAD'], capture=True).strip()
         if revision != spec['revision']:
             raise SystemExit(f'{name}: revision differs from the pin; use a new workspace, never reset this one')
-        patch_name = {'script-migration':'script-migration-shared-dev-roles.patch'}.get(name)
-        if patch_name:
-            patch = ROOT/'patches'/patch_name
-            reverse = subprocess.run(['git','-C',str(path),'apply','--reverse','--check',str(patch)],capture_output=True)
-            if reverse.returncode:
-                run(['git','-C',str(path),'apply','--check',str(patch)])
-                run(['git','-C',str(path),'apply',str(patch)])
         dirty = bool(run(['git', '-C', str(path), 'status', '--porcelain'], capture=True))
         inventory[name] = {'path': str(path), 'revision': revision, 'dirty': dirty}
         print(f'{name}: {revision[:12]}' + (' (local edits preserved)' if dirty else ''))

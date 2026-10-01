@@ -2,6 +2,5 @@
   "auth-service-backend": {"url": "git@gitlab.com:openmarketxyz/common/auth-service-backend.git", "revision": "f680833f49da7123d04d122acc87b3b61ff20d15"},
   "tharamine-user-service": {"url": "git@gitlab.com:openmarketxyz/js-backend/tharamine-user-service.git", "revision": "a9b4cad33fb038a0585db474211e1982bdbe28e8"},
   "orange-v2-backend": {"url": "git@gitlab.com:openmarketxyz/js-backend/orange-v2-backend.git", "revision": "1033e2cba3d01a381ad4d8c634713325c66b837b"},
-  "script-migration": {"url": "git@gitlab.com:openmarketxyz/js-backend/script-migration.git", "revision": "6260b7917482116e6e1976491c0b883f13c31ba2"},
   "kiyotaka-frontend": {"url": "git@gitlab.com:openmarketxyz/frontend/kiyotaka-frontend.git", "revision": "9939fee27831cfd3137dc21fd6ecce2bc42872e6"}
 }

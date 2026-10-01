@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""chart {mongo|sources|deps|apps|runtime|fixtures|sync} --help"""
+"""chart {mongo|sources|deps|apps|runtime|sync} --help"""
 import os
 from pathlib import Path
 import sys
-commands = {name: name + '.py' for name in ('mongo', 'sources', 'deps', 'apps', 'runtime', 'fixtures', 'sync')}
+commands = {name: name + '.py' for name in ('mongo', 'sources', 'deps', 'apps', 'runtime', 'sync')}
 if len(sys.argv) < 2 or sys.argv[1] not in commands:
     print(__doc__)
     sys.exit(0 if len(sys.argv) == 1 or sys.argv[1] in ('-h', '--help') else 2)
