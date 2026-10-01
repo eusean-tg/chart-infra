@@ -1,0 +1,3 @@
+# Unified patch context includes a single space on otherwise blank lines.
+# Preserve those bytes; stripping them can corrupt the patch.
+*.patch -whitespace

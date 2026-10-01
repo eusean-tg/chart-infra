@@ -1,0 +1,160 @@
+"""Real protocol checks; touches only the pilot's synthetic fixture database."""
+import hashlib
+import json
+import socket
+import ssl
+import subprocess
+import time
+
+
+def external(m, js, admin=False):
+    c = json.loads((m.IDENTITY / 'credentials.json').read_text())
+    key = 'admin_' if admin else ''
+    user = c['admin_user'] if admin else c['user']
+    pwd = c['admin_password'] if admin else c['password']
+    base = 'mongodb://' + user + ':' + pwd + '@'
+    options = '/pilot?authSource=admin&replicaSet=rs0&tls=true&tlsCAFile=/ca.crt&serverSelectionTimeoutMS=15000&connectTimeoutMS=5000'
+    uri = base + ','.join(x + ':27017' for x in m.EXT) + options
+    prefix = 'assert.eq=assert.equal;const uri=' + json.dumps(uri) + ';const conn=new Mongo(uri);const d=conn.getDB("pilot");\n'
+    args = ['docker', 'run', '--rm', '-i', '--network', 'host', '--user', '1000:1000', '--read-only',
+            '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--tmpfs', '/tmp:rw,nosuid,nodev',
+            '--env', 'HOME=/tmp', '--mount', 'type=bind,src=' + str(m.OUT / 'ca.crt') + ',dst=/ca.crt,readonly',
+            '--entrypoint', 'mongosh']
+    for name in m.EXT:
+        args += ['--add-host', name + ':' + m.load('host.json')['tailscale']]
+    args += [m.IMAGE, '--nodb', '--quiet', '--file', '/dev/stdin']
+    result = subprocess.run(args, input=prefix + js, text=True, capture_output=True, timeout=150)
+    if result.returncode:
+        error = result.stderr + result.stdout
+        for password in (c['password'], c['admin_password']):
+            error = error.replace(password, '[redacted]')
+        raise RuntimeError(error[-2500:])
+    return json.loads(result.stdout)
+
+
+def check(m):
+    inv = m.inventory()
+    statuses = m.ready()
+    results = {}
+    host = m.load('host.json')['tailscale']
+    ctx = ssl.create_default_context(cafile=str(m.OUT / 'ca.crt'))
+    certs = []
+    for name in m.EXT:
+        with socket.create_connection((host, 27017), timeout=5) as sock:
+            with ctx.wrap_socket(sock, server_hostname=name) as tls:
+                cert = tls.getpeercert()
+                cn = dict(x[0] for x in cert['subject'])['commonName']
+                assert cn == name, (name, cn)
+                certs.append({'name': name, 'subject': cn, 'tls': tls.version()})
+    results['distinct_member_tls_routing'] = certs
+    # Wrong SNI and a client without the development CA must not succeed.
+    for name, context in [('unknown.mongo.pilot.dev.test', ctx), (m.EXT[0], ssl.create_default_context())]:
+        try:
+            with socket.create_connection((host, 27017), timeout=5) as sock:
+                with context.wrap_socket(sock, server_hostname=name):
+                    raise AssertionError('Unexpected TLS success: ' + name)
+        except (ssl.SSLError, ConnectionError, TimeoutError):
+            pass
+    results['wrong_sni_and_untrusted_ca_rejected'] = True
+    node = json.loads(m.run(['kubectl', 'get', 'node', m.load('host.json')['node'], '-o', 'json'], capture=True))
+    lan = next(a['address'] for a in node['status']['addresses'] if a['type'] == 'InternalIP')
+    try:
+        with socket.create_connection((lan, 27017), timeout=3):
+            raise AssertionError('Unexpected Mongo listener on LAN IP')
+    except (ConnectionError, TimeoutError):
+        pass
+    try:
+        with socket.create_connection((host, 27017), timeout=3, source_address=(lan, 0)) as sock:
+            with ctx.wrap_socket(sock, server_hostname=m.EXT[0]):
+                raise AssertionError('LAN-sourced connection bypassed proxy ACL')
+    except (ssl.SSLError, ConnectionError, TimeoutError):
+        pass
+    results['host_lan_destination_and_lan_source_denied'] = True
+    protocol = external(m, r'''
+const h=d.hello();assert.eq(h.hosts.length,3);
+assert(h.hosts.every(x=>x.endsWith('.mongo.pilot.dev.test:27017')));
+const token='synthetic-fixture-v1';
+d.persistence.updateOne({_id:'retained'},{$setOnInsert:{token,createdAt:new Date()}},{upsert:true,writeConcern:{w:'majority',wtimeout:10000}});
+assert.eq(d.persistence.findOne({_id:'retained'}).token,token);
+let denied=false;try { conn.getDB('admin').runCommand({usersInfo:1}); } catch(e) {denied=e.code===13;} assert(denied);
+const session=conn.startSession();const sd=session.getDatabase('pilot');
+session.startTransaction({writeConcern:{w:'majority'}});
+sd.transactions.updateOne({_id:'committed'},{$set:{ok:true}},{upsert:true});session.commitTransaction();session.endSession();
+let unauth=false;const plain=new Mongo(uri.replace(/\/\/[^@]+@/,'//'));
+try {plain.getDB('pilot').persistence.findOne({});}catch(e){unauth=e.code===13;}assert(unauth);
+const members=[];
+for(const name of h.hosts){
+ const direct=new Mongo(uri.replace(/@[^/]+\//,'@'+name+'/').replace('&replicaSet=rs0','')+'&directConnection=true');
+ const hello=direct.getDB('pilot').hello();
+ assert(hello.hosts.every(x=>x.endsWith('.mongo.pilot.dev.test:27017')));
+ if(hello.secondary){let rejected=false;try{direct.getDB('pilot').secondary_guard.insertOne({synthetic:true});}catch(e){rejected=true;}assert(rejected);}
+ members.push({endpoint:name,primary:hello.isWritablePrimary,secondary:hello.secondary});
+}
+print(JSON.stringify({hosts:h.hosts,primary:h.primary,members,retained:d.persistence.findOne({_id:'retained'}),majorityTransaction:true,unauthenticatedDenied:unauth,adminDenied:denied}));
+''')
+    results['external_protocol'] = protocol
+    c = json.loads((m.IDENTITY / 'credentials.json').read_text())
+    internal_uri = 'mongodb://' + c['user'] + ':' + c['password'] + '@' + ','.join(x + ':27017' for x in m.INT) + '/pilot?authSource=admin&replicaSet=rs0&tls=true&tlsCAFile=/secrets/ca.crt&serverSelectionTimeoutMS=10000'
+    internal = json.loads(m.shell('const c=new Mongo(' + json.dumps(internal_uri) + ');const d=c.getDB("pilot");assert.eq(d.persistence.findOne({_id:"retained"}).token,"synthetic-fixture-v1");print(JSON.stringify(d.hello().hosts));', auth=False))
+    assert sorted(internal) == sorted(x + ':27017' for x in m.INT)
+    results['in_cluster_driver_discovery_and_read'] = internal
+    results['replica_members'] = statuses
+    assert len(protocol['members']) == 3
+    assert sum(x['primary'] for x in protocol['members']) == 1
+    for obj in json.loads(m.run(['kubectl', '-n', m.NS, 'get', 'pods', '-o', 'json'], capture=True))['items']:
+        for c in obj['spec']['containers']:
+            assert not c.get('resources', {}).get('requests') and not c.get('resources', {}).get('limits')
+    results['no_container_resource_requests_or_limits'] = True
+    pv = m.kget('pv', m.PV, None)
+    assert pv['spec']['local']['path'] == str(m.DATA) and pv['spec']['persistentVolumeReclaimPolicy'] == 'Retain'
+    assert pv['metadata']['uid'] == inv['pv_uid']
+    assert m.kget('pvc', m.CLAIM)['metadata']['uid'] == inv['pvc_uid']
+    for i in range(3):
+        assert (m.DATA / 'default' / f'member-{i}' / 'WiredTiger').exists()
+    results['three_hdd_members_one_retained_pvc'] = True
+    for service in json.loads(m.run(['kubectl', '-n', m.NS, 'get', 'svc', '-o', 'json'], capture=True))['items']:
+        assert service['spec']['type'] == 'ClusterIP'
+    results['no_nodeport_or_loadbalancer'] = True
+    # Compare the pre-pilot workload snapshot, excluding the newly authorized Mongo pilot.
+    baseline = m.load('dns-pilot/before.json')
+    current = {}
+    for obj in json.loads(m.run(['kubectl', 'get', 'deployments,statefulsets,daemonsets,services', '-A', '-o', 'json'], capture=True))['items']:
+        md=obj['metadata']
+        if md.get('namespace') in (m.NS, 'shared-dev-dns-pilot'):
+            continue
+        current[f"{md.get('namespace')}/{obj['kind']}/{md['name']}"]={'uid':md['uid'],'spec_sha256':hashlib.sha256(json.dumps(obj['spec'],sort_keys=True).encode()).hexdigest()}
+    cm=m.kget('configmap','coredns','kube-system')
+    current['kube-system/ConfigMap/coredns']={'uid':cm['metadata']['uid'],'data_sha256':hashlib.sha256(json.dumps(cm['data'],sort_keys=True).encode()).hexdigest()}
+    assert current == baseline, 'An unrelated workload changed; inspect the difference'
+    results['preexisting_workloads_and_cluster_dns_unchanged'] = True
+    report={'time':time.strftime('%Y-%m-%dT%H:%M:%S%z'),'passed':True,'checks':results,
+            'limitations':['Host Docker client uses explicit host mappings, not the Mac resolver.', 'Actual Mac Compass, remote LAN denial and remote failover still require user testing.']}
+    m.save('mongo-pilot/verification.json',report)
+    print(json.dumps(report,indent=2))
+
+
+def failover(m):
+    m.inventory()
+    m.ready()
+    c = json.loads((m.IDENTITY / 'credentials.json').read_text())
+    js = 'const adminUri=uri.replace(' + json.dumps(c['user'] + ':' + c['password'] + '@') + ',' + json.dumps(c['admin_user'] + ':' + c['admin_password'] + '@') + ');\n'
+    js += '''
+d.failover.updateOne({_id:'survived-election'},{$set:{phase:'before'}},{upsert:true,writeConcern:{w:'majority',wtimeout:10000}});
+const before=d.hello().primary;const admin=new Mongo(adminUri);const started=Date.now();
+try {const r=admin.getDB('admin').runCommand({replSetStepDown:60,secondaryCatchUpPeriodSecs:15});assert.eq(r.ok,1);} catch(e) {if(!String(e).includes('connection') && !String(e).includes('network')) throw e;}
+let after=null;let last=null;
+while(Date.now()-started<90000){
+ try {
+  d.failover.updateOne({_id:'survived-election'},{$set:{phase:'after'}},{writeConcern:{w:'majority',wtimeout:10000}});
+  after=d.hello().primary;if(after!==before) break;
+ }catch(e){last=String(e);}sleep(500);
+}
+assert(after && after!==before,'No different primary within deadline');assert.eq(d.failover.findOne({_id:'survived-election'}).phase,'after');
+print(JSON.stringify({before,after,recoveryMs:Date.now()-started,sameApplicationConnection:true,majorityWriteRecovered:true}));
+'''
+    result=external(m, js)
+    result['members_after']=m.ready()
+    result['passed']=True
+    result['time']=time.strftime('%Y-%m-%dT%H:%M:%S%z')
+    m.save('mongo-pilot/failover.json',result)
+    print(json.dumps(result,indent=2))

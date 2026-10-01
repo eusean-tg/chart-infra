@@ -1,0 +1,138 @@
+diff --git a/.env.sample b/.env.sample
+index 59cdf7e..d4fb4a7 100644
+--- a/.env.sample
++++ b/.env.sample
+@@ -391,3 +391,9 @@ SMALL_LANE_CAS_REQUIRE=false
+ # first reverts this service and orange-v2-backend to their last images before
+ # the legacy Monitor grid routes were retired (that bundle needs those routes).
+ MULTIMODE_CONVERSION_DISABLED=false
++
++# Local development only; staging/production ignore this switch.
++LOCAL_BACKGROUND_WORKERS_DISABLED=false
++
++# Increase explicitly for a cold development database on slower storage.
++MONGO_WAIT_QUEUE_TIMEOUT_MS=10000
+diff --git a/docs/development/architecture.md b/docs/development/architecture.md
+index 55f26a6..6d3c9cd 100644
+--- a/docs/development/architecture.md
++++ b/docs/development/architecture.md
+@@ -54,7 +54,7 @@ tests and deploy are in [operations.md](operations.md). Working rules for agents
+ 3. binds the port and sets `server.requestTimeout`, `server.headersTimeout` and `server.keepAliveTimeout` from
+    `SERVER_REQUEST_TIMEOUT_MS`, `SERVER_HEADERS_TIMEOUT_MS` and `SERVER_KEEP_ALIVE_TIMEOUT_MS`, as backstops above the
+    per-request timeout;
+-4. starts the background workers, then the Telegram bootstrap and the kScript alert reconcilers
++4. unless local-only `LOCAL_BACKGROUND_WORKERS_DISABLED` is enabled, starts the background workers, then the Telegram bootstrap and the kScript alert reconcilers
+    ([Background workers and reconcilers](#background-workers-and-reconcilers));
+ 5. installs the SIGTERM / SIGINT handlers ([Shutdown](#shutdown)).
+ 
+diff --git a/docs/development/operations.md b/docs/development/operations.md
+index 7fe445c..f8b4941 100644
+--- a/docs/development/operations.md
++++ b/docs/development/operations.md
+@@ -418,3 +418,9 @@ Backend stack logs: `kscript-backend-v2/local-dev/logs/*.log` (`stack.sh logs <s
+ `kscript-backend-v2/docs/local-setup-runbook.md` in that repo.
+ 
+ Rooms recovery and alert handling live with each owning feature; use the supporting-doc table in the [feature index](../features/README.md#related-docs).
++
++## Offline local background workers
++
++`LOCAL_BACKGROUND_WORKERS_DISABLED=true` prevents `App.listen` from starting background workers, Telegram bootstrap and kScript reconcilers in local environments. Staging and production ignore this flag. It defaults off; shutdown remains safe when workers were never started. It does not disable API authentication or replace network egress restrictions.
++
++`MONGO_WAIT_QUEUE_TIMEOUT_MS` configures the Mongo driver connection-pool checkout timeout (default 10000 ms). A cold development database on HDD may need a longer explicit value while boot creates indexes; this does not disable index creation or relax authentication.
+diff --git a/src/app.ts b/src/app.ts
+index 86278b9..6147c37 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -257,30 +257,34 @@ class App {
+     // Above upstream proxy idle timeout: Node's 5s default races ingress →
+     // ECONNRESET/502s. Ordering vs headersTimeout: environments/index.ts.
+     server.keepAliveTimeout = environments.SERVER_KEEP_ALIVE_TIMEOUT_MS;
+-    this.omRoomOutboxPublisher.start();
+-    this.omRoomAttachmentScanWorker.start();
+-    this.omRoomAttachmentGcWorker.start();
+-    this.omRoomNotifyWorker.start();
+-    this.omRoomUnfurlWorker.start();
+-    this.omEventSubscriptionDeliveryWorker.start();
+-    this.omRoomAlertSweepWorker.start();
+-    this.voiceCapacityWorker.start();
+-    this.workspaceTempExpiryLogWorker.start();
+-    this.omCanvasThumbnailMaintenanceWorker.start();
+-
+-    // Background: Telegram outage must never take the service down. Retries
+-    // forever, never throws; .catch = last-resort guard if a regression escapes.
+-    bootstrapTelegramWithRetry().catch((err) => {
+-      logger.error('Telegram bootstrap retry loop exited unexpectedly', {
+-        error: err,
+-      });
+-      Sentry.captureException(err, {
+-        tags: { component: 'telegram-bootstrap' },
++    if (!environments.LOCAL_BACKGROUND_WORKERS_DISABLED) {
++      this.omRoomOutboxPublisher.start();
++      this.omRoomAttachmentScanWorker.start();
++      this.omRoomAttachmentGcWorker.start();
++      this.omRoomNotifyWorker.start();
++      this.omRoomUnfurlWorker.start();
++      this.omEventSubscriptionDeliveryWorker.start();
++      this.omRoomAlertSweepWorker.start();
++      this.voiceCapacityWorker.start();
++      this.workspaceTempExpiryLogWorker.start();
++      this.omCanvasThumbnailMaintenanceWorker.start();
++
++      // Background: Telegram outage must never take the service down. Retries
++      // forever, never throws; .catch = last-resort guard if a regression escapes.
++      bootstrapTelegramWithRetry().catch((err) => {
++        logger.error('Telegram bootstrap retry loop exited unexpectedly', {
++          error: err,
++        });
++        Sentry.captureException(err, {
++          tags: { component: 'telegram-bootstrap' },
++        });
+       });
+-    });
+ 
+-    startKscriptAlertReconciler();
+-    startKscriptAlertContractExpiryReconciler();
++      startKscriptAlertReconciler();
++      startKscriptAlertContractExpiryReconciler();
++    } else {
++      logger.info('Background workers disabled for offline local development');
++    }
+ 
+     // Drain + later stages must finish below the pod's termination grace →
+     // exit before kubelet SIGKILL. Chart sets no grace → k8s default 30s.
+diff --git a/src/db/db-connection.ts b/src/db/db-connection.ts
+index ac0f603..09ba1e3 100644
+--- a/src/db/db-connection.ts
++++ b/src/db/db-connection.ts
+@@ -541,7 +541,7 @@ export async function connectToDatabase(): Promise<typeof mongoose> {
+       dbName,
+       socketTimeoutMS: 45000,
+       serverSelectionTimeoutMS: 10000,
+-      waitQueueTimeoutMS: 10000,
++      waitQueueTimeoutMS: environments.MONGO_WAIT_QUEUE_TIMEOUT_MS,
+       maxIdleTimeMS: 60000,
+       heartbeatFrequencyMS: 10000,
+     });
+diff --git a/src/environments/index.ts b/src/environments/index.ts
+index e3a6ee5..48600e9 100644
+--- a/src/environments/index.ts
++++ b/src/environments/index.ts
+@@ -140,6 +140,10 @@ export const environments = {
+   // Environment
+   NODE_ENV: env.NODE_ENV || 'development',
+   IS_LOCAL: !NON_LOCAL_ENV.includes(env.NODE_ENV as string),
++  // Offline development profiles must not start notification/acquisition workers.
++  LOCAL_BACKGROUND_WORKERS_DISABLED:
++    !NON_LOCAL_ENV.includes(env.NODE_ENV as string) &&
++    env.LOCAL_BACKGROUND_WORKERS_DISABLED === 'true',
+   PORT: Number(env.PORT) || 5001,
+ 
+   // Author-stats cache: TTL ms, LRU max entries (leak cap). 'false' → every read
+@@ -191,6 +195,7 @@ export const environments = {
+ 
+   // Database (MongoDB)
+   MONGO_URI: env.MONGO_URI,
++  MONGO_WAIT_QUEUE_TIMEOUT_MS: Number(env.MONGO_WAIT_QUEUE_TIMEOUT_MS) || 10000,
+   MONGO_DB_NAME: env.MONGO_DB_NAME ?? 'orange',
+ 
+   // OM Rooms Dragonfly/Redis-compatible event outbox.
