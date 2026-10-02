@@ -2,12 +2,15 @@
 
 Chart-infra runs the chart application's TypeScript backends on a registered shared development PC. Developers run the frontend and their coding agent on a laptop; Mutagen sends backend source over SSH to HDD mirrors mounted by k3s.
 
+The parallel [Incus pilot preparation](incus/README.md) provides host and Ubuntu 26.04 box preparation commands. Its source/dependencies use a bounded SSD pool and retained data uses HDD. The k3s lifecycle below remains independent; preparing a box does not migrate applications or change laptop sync sessions.
+
 Each application profile contains auth, Tharamine, Orange, an authenticated Dragonfly cache, and a single-member MongoDB replica set. The environment supports offline sign-in and saved workspaces. Live market data, external delivery, billing and production integrations are outside its operating scope.
 
 ## Start here
 
 | Task | Guide |
 | --- | --- |
+| Prepare the parallel Ubuntu 26.04 Incus host/box foundation | [Incus preparation](incus/README.md) |
 | Connect a frontend, edit code, inspect Mongo, start or stop a prepared profile | [Getting started](docs/GETTING-STARTED.md) |
 | Configure source synchronization or import development environment settings with an agent | [Agent onboarding](docs/AGENT-ONBOARDING.md) |
 | Prepare runtime/dependencies, inspect storage and understand commands | [Operations reference](docs/OPERATIONS.md) |
@@ -52,6 +55,7 @@ python3 tests/stock_source.py
 python3 tests/backend_key.py
 python3 tests/mongo_checks.py
 python3 tests/skill_context.py
+python3 tests/incus_prep.py
 ```
 
 See [verification boundaries](docs/OPERATIONS.md#verification) before running tests that contact the cluster or create fixtures. Read [AGENTS.md](AGENTS.md) before modifying this project.

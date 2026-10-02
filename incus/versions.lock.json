@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "ubuntu": "26.04",
+  "architecture": "amd64",
+  "packages": {
+    "incus-base": "6.0.5-8",
+    "incus-client": "6.0.5-8",
+    "dnsmasq-base": "2.92-1ubuntu0.4",
+    "btrfs-progs": "6.17.1-1build1",
+    "uidmap": "1:4.17.4-2ubuntu3",
+    "iptables": "1.8.11-2ubuntu3",
+    "nftables": "1.1.6-1",
+    "docker.io": "29.1.3-0ubuntu4.1",
+    "docker-compose-v2": "2.40.3+ds1-0ubuntu1",
+    "openssh-server": "1:10.2p1-2ubuntu3.6"
+  },
+  "mutagen": "0.18.1",
+  "image": {
+    "build": "20261001_07:42",
+    "fingerprint": "2a458537e11743c943828fc596bdbb6973a1a2bfc49d4f5754c9ddb16d57bb81",
+    "files": {
+      "incus.tar.xz": {
+        "url": "https://images.linuxcontainers.org/images/ubuntu/resolute/amd64/default/20261001_07:42/incus.tar.xz",
+        "sha256": "a8022e1d533d3bd49225182e21d0e6f04e36442f69ed5d0dd22eaf8cee1c94e0"
+      },
+      "rootfs.tar.xz": {
+        "url": "https://images.linuxcontainers.org/images/ubuntu/resolute/amd64/default/20261001_07:42/rootfs.tar.xz",
+        "sha256": "bd7021086f8f8c294d0485e3dc8b8ccd50cafe725441a0cbe6c11c0746c20936"
+      }
+    }
+  },
+  "tailscale": {
+    "version": "1.102.4",
+    "url": "https://pkgs.tailscale.com/stable/ubuntu/pool/tailscale_1.102.4_amd64.deb",
+    "sha256": "758cd0b2536d35dc1f02b785784dd18d08945ff644fcd92b1b0d597b6fa56f8b"
+  }
+}

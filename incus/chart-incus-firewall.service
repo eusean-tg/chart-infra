@@ -1,0 +1,14 @@
+[Unit]
+Description=Chart Incus bridge restrictions and Docker forwarding coexistence
+After=network-online.target docker.service incus.service
+Wants=network-online.target
+PartOf=docker.service incus.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/python3 /usr/local/lib/chart-incus/firewall.py
+ExecReload=/usr/bin/python3 /usr/local/lib/chart-incus/firewall.py
+
+[Install]
+WantedBy=multi-user.target docker.service incus.service

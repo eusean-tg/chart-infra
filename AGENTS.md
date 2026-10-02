@@ -2,6 +2,8 @@
 
 Read [README.md](README.md) and [docs/OPERATIONS.md](docs/OPERATIONS.md). Use [docs/AGENT-ONBOARDING.md](docs/AGENT-ONBOARDING.md) for source synchronization and development configuration imports. The reusable agent entry point is [skills/chart-infra/SKILL.md](skills/chart-infra/SKILL.md).
 
+For the parallel Incus pilot, read [incus/README.md](incus/README.md). `./chart`, profile registration and the source-activation protocol below apply to k3s. Incus preparation uses its own host config and retained box marker; it does not replace existing profiles or sync sessions. Source/dependencies for Incus reside on the bounded SSD pool, with datasets and identities on the verified HDD. Use Mutagen over box SSH. Keep host Incus administration with the operator; developer root is confined to their unprivileged box.
+
 ## Operating boundaries
 
 - Target only the registered shared development PC and cluster. Preserve host, HDD, ownership, data-marker and volume-UID checks. Use the corresponding lifecycle locks for mutations.
@@ -15,7 +17,7 @@ Read [README.md](README.md) and [docs/OPERATIONS.md](docs/OPERATIONS.md). Use [d
 
 ## Source and configuration
 
-- Keep backend checkouts, mirrors and Linux dependency caches on the verified HDD. Do not edit laptop-owned mirrors or apply local backend patches.
+- Keep k3s backend checkouts, mirrors and Linux dependency caches on the verified HDD. Use the SSD source/cache paths for Incus boxes. Do not edit laptop-owned mirrors or apply local backend patches.
 - Use the matching `laptop-sync.py` and `sync_common.py` with the pinned Mutagen version. Discover laptop paths explicitly. Preserve unrelated sessions and synchronization configurations; operate only on recorded owned session IDs.
 - Freeze laptop sessions before installing dependencies or selecting synced source. A valid freeze flushes, pauses owned sessions and verifies matching fingerprints. Plain pause is insufficient. Do not forge checkpoints or resume through raw Mutagen commands.
 - Keep runtime source, dependency and configuration mounts read-only. Use explicit workspace selection while apps are stopped; retain prior generations for rollback.

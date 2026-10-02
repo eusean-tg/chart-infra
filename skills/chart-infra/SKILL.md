@@ -1,11 +1,13 @@
 ---
 name: chart-infra
-description: Operate the chart-infra shared chart backend development environment, including retained Mongo/app lifecycle, laptop source sync, dependency selection, and agent-led onboarding. Use for chart-infra tasks, not the separate Go pipeline or production services.
+description: Operate chart-infra k3s profiles or prepare its parallel Incus developer-box pilot, including retained data, laptop source sync and agent-led onboarding. Use for chart-infra tasks, not the separate Go pipeline or production services.
 ---
 
 # Chart infrastructure operator
 
-Use the existing `chart` commands from the chart-infra checkout. Establish the operator account, profile, checkout path and intended operation before changing a deployment. A developer's laptop agent owns the laptop checkout and Mutagen sessions; the PC owns runtime configuration, dependencies and retained data.
+Establish the target backend (k3s profile or Incus pilot), operator account, checkout path and intended operation before changing a deployment. Use `chart` for k3s. For Incus, read `incus/README.md` and use `incus/prep.py`; its preparation commands do not deploy applications or control laptop sync. A developer's laptop agent owns the laptop checkout and Mutagen sessions; the PC owns runtime configuration, dependencies and retained data.
+
+Incus uses SSD source/dependencies and a required per-box HDD data attachment. Host preparation needs the host operator's sudo. Developers use key-only SSH as root inside their own unprivileged box; they receive no host Incus/Docker/Kubernetes authority. Keep existing k3s profiles and their sessions intact. The remaining workflow below describes k3s; do not pass a box name to its profile activation helpers.
 
 ## Establish context
 

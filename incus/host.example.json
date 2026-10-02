@@ -1,0 +1,11 @@
+{
+  "machine_id": "REPLACE_WITH_HOST_MACHINE_ID",
+  "hdd_uuid": "REPLACE_WITH_FINDMNT_UUID",
+  "hdd_mount": "/mnt/hdd",
+  "boxes_root": "/mnt/hdd/shared-dev/boxes",
+  "bridge": "chartbr0",
+  "bridge_address": "10.200.0.1/24",
+  "pool": "ssd",
+  "pool_size": "200GiB",
+  "project": "chart-dev"
+}
