@@ -143,9 +143,9 @@ bootstrap checks. The host cannot SSH to the box's bridge address by design.
    the real data mount and idmapped writes. Record exact package versions and
    Docker/containerd storage paths. Recheck after stop/start; no existing data
    path is a test fixture.
-3. Pull an explicitly pinned public smoke-test image. Prove Docker pull, a
-   disposable build, container execution and named-volume write/read after
-   recreation. Preserve the test volume; no `prune` or `down -v`. A successful
+3. Use `runtime-proof.py` for the offline build/container/storage checks described
+   below, then pull and execute an explicitly pinned public smoke-test image.
+   Preserve the test volume; no `prune` or `down -v`. A successful
    `docker info` alone does not prove unprivileged nested runtime compatibility.
    Add syscall interception only if a concrete failure demonstrates the need.
 4. Test host/bridge ingress denial and box underlay denial to host management,
@@ -236,11 +236,43 @@ another running box. Stop retains all data; deletion requires an explicit named
 target. Existing k3s data and historical Mongo/DNS pilots are outside these
 commands.
 
+## Offline runtime proof
+
+Copy `runtime-proof.py` and a verified amd64 statically linked BusyBox binary
+into `/root/chart-prep/` in the box over authenticated SSH or Incus file transfer.
+Record the binary's package version and SHA-256 on the source PC. Pass that
+checksum explicitly; the helper does not download a binary or contact a registry.
+
+Inside the box:
+
+```sh
+python3 /root/chart-prep/runtime-proof.py --box <box-name> \
+  --busybox /root/chart-prep/busybox --sha256 <verified-sha256>
+python3 /root/chart-prep/runtime-proof.py --box <box-name> \
+  --busybox /root/chart-prep/busybox --sha256 <verified-sha256> --apply
+```
+
+The helper requires the matching box/data marker, completed guest preparation,
+an unprivileged UID mapping, SSD Docker storage and no running Docker containers.
+It builds a scratch image with a build-time command, writes a synthetic token
+through Docker mounts to a named volume and the HDD, reads both from a second
+container, and starts that reader again. Build and runtime networking are disabled.
+Each run has a unique fixture name. Images, exited containers, the volume, HDD
+fixture and build context/report are retained, including on failure. The report
+is under `/root/chart-prep/runtime-v1-<id>/report.json`.
+
+This proves nested build/execution and retained reads across container instances;
+it does not prove a whole-box stop/start, backups or application persistence.
+With only exited fixtures present, an operator can separately restart the box's
+Docker daemon and start the retained reader again to test daemon-restart retention.
+Use the pinned Node base from `runtime/Dockerfile` for a separate registry-pull and
+Node-execution check. No host Docker restart is needed for either check.
+
 ## Development checks
 
 ```sh
 python3 tests/incus_prep.py
-python3 -m py_compile incus/prep.py incus/firewall.py
+python3 -m py_compile incus/prep.py incus/firewall.py incus/runtime-proof.py
 bash -n incus/guest-prepare.sh
 ```
 
