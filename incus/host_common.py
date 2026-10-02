@@ -37,6 +37,9 @@ def owned(c, name):
     p.require(obj['devices'] == spec['devices'] and obj['profiles'] == [], 'Foreign box devices/profiles')
     for k, v in spec['config'].items():
         p.require(obj['config'].get(k) == v, 'Box configuration differs: ' + k)
+    if 'user.chart-box' in obj['config']:
+        p.require(obj['config']['user.chart-box'] == OWNER, 'Unexpected personal-box registration')
+        spec['config']['user.chart-box'] = OWNER
     p.require(all(k in spec['config'] or k.startswith(('image.', 'volatile.')) for k in obj['config']), 'Unexpected box configuration')
     target = Path(c['boxes_root']) / name; p.no_symlinks(target)
     expected = {'owner': p.OWNER, 'name': name, 'machine_id': c['machine_id'], 'hdd_uuid': c['hdd_uuid']}

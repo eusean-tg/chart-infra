@@ -85,6 +85,7 @@ def prune(c, keep_days):
     p.require(keep_days >= 1, 'Retention must be positive')
     root = backup_root(c)
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=keep_days)
+    if not root.exists(): return
     for generation in sorted(root.iterdir()):
         if generation.is_symlink() or not generation.is_dir(): continue
         try: stamp = dt.datetime.strptime(generation.name, '%Y%m%dT%H%M%S.%fZ').replace(tzinfo=dt.timezone.utc)
@@ -110,7 +111,9 @@ def scheduled(c):
     objects = p.query('/1.0/instances?project=' + c['project'] + '&recursion=1')
     failures = []
     for obj in objects:
-        if obj.get('config', {}).get('user.chart-infra') != p.OWNER or 'data' not in obj.get('devices', {}): continue
+        if (obj.get('config', {}).get('user.chart-infra') != p.OWNER
+                or obj.get('config', {}).get('user.chart-box') != h.OWNER
+                or 'data' not in obj.get('devices', {})): continue
         try: print(backup(c, obj['name'], nightly=True), flush=True)
         except Exception as e: failures.append(obj['name'] + ': ' + str(e))
     if failures: raise RuntimeError('\n'.join(failures))

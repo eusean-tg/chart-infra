@@ -114,8 +114,9 @@ a full ACL/xattr round trip. Inspect filesystem-specific restore needs before li
 recovery. An archive with an external symlink is retained but needs a separately
 reviewed restore method; automatic scratch extraction refuses it.
 
-The timer operates only on owned instances with their expected HDD devices and
-markers. It runs from a root-owned tool snapshot, not a developer-writable checkout.
+The timer operates only on registered personal boxes (`user.chart-box=chart-bare-v1`)
+with their expected HDD devices and markers. The retained managed pilot is excluded
+from automatic stops until explicit migration; a manual backup can target it. It runs from a root-owned tool snapshot, not a developer-writable checkout.
 Missed schedules do not trigger daytime catch-up (`Persistent=false`). Pruning
 covers only completed nightly HDD-only generations older than seven days with a
 newer completed copy. Manual backups, rootfs exports and incomplete generations

@@ -56,6 +56,7 @@ def create(c, name, fingerprint, keyfile, scripts, adopt=False):
         target.mkdir(mode=0o700)
         h.save(target / '.chart-incus-box.json', marker)
     spec = p.instance_spec(c, name); spec['source']['fingerprint'] = fingerprint
+    spec['config']['user.chart-box'] = h.OWNER
     p.query('/1.0/instances?project=' + c['project'], spec, 'POST')
     h.owned(c, name)
     p.run(['incus', 'start', 'local:' + name, '--project', c['project']])

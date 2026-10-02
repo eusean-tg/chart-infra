@@ -142,6 +142,16 @@ class BareBox(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'session paused'): sync.check_policy(None, cfg, 'repo')
             run.assert_called_once_with(None, 'sync', 'pause', 'owned')
 
+    def test_nightly_excludes_managed_pilot_and_builder(self):
+        rows = [
+            {'name': 'managed-pilot', 'config': {'user.chart-infra': image.p.OWNER}, 'devices': {'data': {}}},
+            {'name': 'builder', 'config': {'user.chart-infra': image.p.OWNER}, 'devices': {}},
+            {'name': 'personal', 'config': {'user.chart-infra': image.p.OWNER, 'user.chart-box': h.OWNER}, 'devices': {'data': {}}},
+        ]
+        with patch.object(image.p, 'query', return_value=rows), patch.object(backup, 'backup', return_value='fixture-copy') as copy, patch.object(backup, 'prune'):
+            backup.scheduled({'project': 'test'})
+            copy.assert_called_once_with({'project': 'test'}, 'personal', nightly=True)
+
     def test_refresh_recovers_after_old_session_termination(self):
         from types import SimpleNamespace
         rec = {'name': 'fixture', 'owner': 'ours', 'source': '/laptop', 'tracked': [],
