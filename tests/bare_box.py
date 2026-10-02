@@ -12,6 +12,7 @@ import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'incus'))
 import image
 import host_common as h
@@ -64,6 +65,76 @@ class BareBox(unittest.TestCase):
         with patch.object(image.p, 'capacity', return_value={'review': False}), patch.object(image.p, 'query', return_value=[]):
             with self.assertRaisesRegex(RuntimeError, 'Retained data'):
                 image.create({'boxes_root': str(self.root), 'project': 'p', 'machine_id': 'm', 'hdd_uuid': 'u'}, 'test', 'fp', None, None)
+
+    def test_readiness_waits_for_systemd_and_bus(self):
+        with patch.object(h, 'guest') as guest:
+            h.wait_ready({}, 'test')
+        argv = guest.call_args.args[2]
+        self.assertEqual(argv[:2], ['timeout', '90'])
+        for name, body in {
+            'systemctl': 'if test -e "$FIXTURE/systemd"; then echo degraded; exit 1; fi; touch "$FIXTURE/systemd"; echo starting; exit 1',
+            'timedatectl': 'if test -e "$FIXTURE/bus"; then echo Asia/Kuala_Lumpur; exit 0; fi; touch "$FIXTURE/bus"; exit 1',
+            'sleep': 'exit 0',
+        }.items():
+            script = self.root / name; script.write_text('#!/bin/sh\n' + body + '\n'); script.chmod(0o755)
+        result = subprocess.run(argv, env={**os.environ, 'FIXTURE': str(self.root),
+                                'PATH': str(self.root) + ':' + os.environ['PATH']}, timeout=5)
+        self.assertEqual(result.returncode, 0)
+        self.assertTrue((self.root / 'systemd').exists()); self.assertTrue((self.root / 'bus').exists())
+
+    def test_failed_readiness_does_not_start_identity_writes(self):
+        with patch.object(h, 'guest', side_effect=RuntimeError('timeout')) as guest, patch.object(h, 'push') as push:
+            with self.assertRaisesRegex(RuntimeError, 'readiness failed'):
+                image.provision({}, 'test', None, None)
+        self.assertEqual(guest.call_count, 1); push.assert_not_called()
+
+    @contextlib.contextmanager
+    def resume_fixture(self, state='fresh', *, base='fp'):
+        builder, tests = image.names('test')
+        directory = self.root / 'bare-images/test'; scripts = directory / 'scripts'; scripts.mkdir(parents=True)
+        for name in image.FILES: (scripts / name).write_text('snapshot')
+        record = {'owner': h.OWNER, 'build': 'test', 'builder': builder, 'tests': tests,
+                  'commit': 'original', 'phase': 'acceptance-pending', 'fingerprint': 'fp'}
+        (directory / 'build.json').write_text(json.dumps(record))
+        c = {'project': 'p'}
+        with patch.object(image.p, 'STATE', self.root), patch.object(image.p, 'config', return_value=c), \
+             patch.object(image.p, 'check_host'), patch.object(image.p, 'locked', contextlib.nullcontext), \
+             patch.object(h, 'host'), patch.object(h, 'candidate', return_value={'properties': {'chart.build': 'test', 'chart.commit': 'original'}}), \
+             patch.object(image.p, 'public_key'), patch.object(image.p, 'run', return_value='snapshot'), \
+             patch.object(image.p, 'query', return_value=[{'name': tests[0]}]), \
+             patch.object(h, 'owned', return_value={'status': 'Running', 'config': {'volatile.base_image': base}}), \
+             patch.object(h, 'wait_ready'), patch.object(h, 'guest', return_value=state), \
+             patch.object(image, 'provision', return_value='') as provision, patch.object(image, 'create') as create, \
+             contextlib.redirect_stdout(io.StringIO()):
+            yield SimpleNamespace(config='fixture', build='test', apply=True), provision, create, scripts, record
+
+    def test_resume_reuses_published_image_and_original_scripts(self):
+        with self.resume_fixture() as (args, provision, create, scripts, record):
+            image.resume(args)
+            provision.assert_called_once_with({'project': 'p'}, record['tests'][0], scripts.parent / 'authorized_key', scripts)
+            create.assert_called_once_with({'project': 'p'}, record['tests'][1], 'fp', scripts.parent / 'authorized_key', scripts)
+            self.assertEqual(json.loads((scripts.parent / 'build.json').read_text()), record)
+
+    def test_resume_does_not_reprovision_prepared_identity(self):
+        with self.resume_fixture('prepared') as (args, provision, create, _, _):
+            image.resume(args)
+            provision.assert_not_called(); create.assert_called_once()
+
+    def test_resume_refuses_partial_identity(self):
+        with self.resume_fixture('partial') as (args, provision, create, _, _):
+            with self.assertRaisesRegex(RuntimeError, 'Partial identity'): image.resume(args)
+            provision.assert_not_called(); create.assert_not_called()
+
+    def test_resume_refuses_replaced_test_instance(self):
+        with self.resume_fixture(base='foreign') as (args, provision, create, _, _):
+            with self.assertRaisesRegex(RuntimeError, 'Wrong test image'): image.resume(args)
+            provision.assert_not_called(); create.assert_not_called()
+
+    def test_resume_refuses_changed_snapshot(self):
+        with self.resume_fixture() as (args, provision, create, scripts, _):
+            (scripts / image.FILES[0]).write_text('changed')
+            with self.assertRaisesRegex(RuntimeError, 'script differs'): image.resume(args)
+            provision.assert_not_called(); create.assert_not_called()
 
     def test_restore_checks_contents_and_refuses_overwrite(self):
         source = self.root / 'backup'; source.mkdir()

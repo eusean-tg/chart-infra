@@ -35,6 +35,7 @@ def names(build):
 
 
 def provision(c, name, keyfile, scripts, adopt=False):
+    h.wait_ready(c, name)
     h.guest(c, name, ['install', '-d', '-m', '700', '/root/chart-prep'])
     h.push(c, name, scripts / 'bare-identity.sh', '/root/chart-prep/bare-identity.sh')
     h.push(c, name, keyfile, '/root/chart-prep/authorized_keys')
@@ -97,6 +98,7 @@ def build(a):
         del spec['devices']['data']; del spec['devices']['tun']
         p.query('/1.0/instances?project=' + c['project'], spec, 'POST')
         p.run(['incus', 'start', 'local:' + builder, '--project', c['project']])
+        h.wait_ready(c, builder)
         h.guest(c, builder, ['install', '-d', '-m', '700', '/root/chart-prep'])
         h.guest(c, builder, ['touch', '/var/lib/chart-bare-builder'])
         for name in ('bare-base.sh', 'guest-firewall.sh'): h.push(c, builder, scripts / name, '/root/chart-prep/' + name)
@@ -121,6 +123,50 @@ def build(a):
             create(c, name, record['fingerprint'], directory / 'authorized_key', scripts)
             print(f'sudo incus exec local:{name} --project {c["project"]} -- tailscale up --hostname={name} --accept-routes=false --accept-dns=true --ssh=false')
         print('Enroll the two test boxes, then run image-verify. No alias moved; no existing box changed.')
+
+
+def resume(a):
+    c = p.config(a.config); p.check_host(c)
+    builder, tests = names(a.build)
+    if not a.apply:
+        print('Plan: finish identity provisioning of the recorded image test boxes; retain image and data.'); return
+    with p.locked():
+        h.host(c)
+        directory = p.STATE / 'bare-images' / a.build
+        record = json.loads((directory / 'build.json').read_text())
+        p.require(record.get('owner') == h.OWNER and record.get('build') == a.build
+                  and record.get('builder') == builder and record.get('tests') == tests
+                  and record.get('phase') == 'acceptance-pending', 'Not a resumable published build')
+        candidate = h.candidate(c, record['fingerprint'])
+        p.require(candidate['properties'].get('chart.build') == a.build
+                  and candidate['properties'].get('chart.commit') == record['commit'], 'Candidate provenance differs')
+        scripts = directory / 'scripts'
+        git = ['git', '-c', 'safe.directory=' + str(p.HERE.parent), '-C', p.HERE.parent]
+        for name in FILES:
+            p.require((scripts / name).read_text() == p.run([*git, 'show', record['commit'] + ':incus/' + name]),
+                      'Recorded provisioning script differs: ' + name)
+        p.public_key(directory / 'authorized_key')
+        existing = {obj['name'] for obj in p.query('/1.0/instances?project=' + c['project'] + '&recursion=1')}
+        for name in tests:
+            if name not in existing:
+                create(c, name, record['fingerprint'], directory / 'authorized_key', scripts)
+            else:
+                obj = h.owned(c, name)
+                p.require(obj['config'].get('volatile.base_image') == record['fingerprint'], 'Wrong test image')
+                p.require(obj['status'] in ('Running', 'Stopped'), 'Unexpected test box state')
+                if obj['status'] == 'Stopped':
+                    p.run(['incus', 'start', 'local:' + name, '--project', c['project']])
+                h.wait_ready(c, name)
+                state = h.guest(c, name, ['sh', '-ec',
+                    'if test -e /srv/chart/data/identity/guest-prepared; then echo prepared; '
+                    'elif test -e /srv/chart/data/identity; then echo partial; else echo fresh; fi']).strip()
+                p.require(state in ('fresh', 'prepared'), 'Partial identity in ' + name + '; inspect without regenerating keys')
+                if state == 'fresh':
+                    print(provision(c, name, directory / 'authorized_key', scripts), end='')
+                else:
+                    print(name + ': existing prepared identity retained')
+            print(f'sudo incus exec local:{name} --project {c["project"]} -- tailscale up --hostname={name} --accept-routes=false --accept-dns=true --ssh=false')
+        print('Test boxes prepared. Enroll both, then run image-verify; the image is not yet accepted.')
 
 
 def verify(a):
@@ -176,12 +222,14 @@ def main():
     build_parser = sub.add_parser('image-build')
     for name in ('config', 'build', 'artifacts', 'nvm-artifacts', 'ssh-key'): build_parser.add_argument('--' + name, required=True)
     build_parser.add_argument('--apply', action='store_true')
-    v = sub.add_parser('image-verify')
-    for name in ('config', 'build'): v.add_argument('--' + name, required=True)
-    v.add_argument('--apply', action='store_true')
+    for command in ('image-resume', 'image-verify'):
+        v = sub.add_parser(command)
+        for name in ('config', 'build'): v.add_argument('--' + name, required=True)
+        v.add_argument('--apply', action='store_true')
     a = parser.parse_args()
     if a.command == 'fetch': artifacts(a.nvm_artifacts, fetch=True); print('Pinned nvm files verified.')
     elif a.command == 'image-build': build(a)
+    elif a.command == 'image-resume': resume(a)
     else: verify(a)
 
 

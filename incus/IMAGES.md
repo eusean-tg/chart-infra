@@ -57,7 +57,24 @@ Tailscale SSH reachability, bridge SSH denial and distinct machine/SSH/Tailscale
 identities. It records a verified fingerprint. Test boxes and fixtures remain.
 Application tests, repository secret scanning and seeded-source promotion are not
 part of image acceptance. A failed check records no verified image; inspect the
-retained build. Partial builds use a new name after diagnosis.
+retained build.
+
+Guest provisioning waits up to 90 seconds for systemd and D-Bus. Incus can report
+a started container before those services can handle `timedatectl` or `systemctl`.
+If publication succeeded but test-box provisioning stopped, resume that build:
+
+```sh
+sudo python3 incus/image.py image-resume --config "$CHART_HOST_CONFIG" \
+  --build "$CHART_BUILD" --apply
+```
+
+Resume validates the recorded candidate, instance ownership and original script
+snapshot. It provisions an existing test box only if its HDD identity directory
+is absent, preserves completed identities, and creates missing test boxes. A
+partial identity, changed image or changed script snapshot requires inspection;
+the command does not erase or regenerate it. No image is rebuilt or accepted by
+resume. It prints the enrollment commands; use `image-verify` after enrollment.
+Failures before publication require diagnosis and a separate build name.
 
 ## Create a developer box
 

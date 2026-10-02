@@ -22,6 +22,26 @@ def guest(c, name, args, stdin=None):
     return p.run(['incus', 'exec', 'local:' + name, '--project', c['project'], '--', *args], input=stdin)
 
 
+def wait_ready(c, name):
+    # Incus process startup precedes systemd and D-Bus readiness inside the guest.
+    probe = '''
+while true; do
+  state=$(timeout 5 systemctl is-system-running 2>/dev/null || true)
+  case "$state" in
+    running|degraded)
+      if timeout 5 timedatectl show --property=Timezone --value >/dev/null 2>&1; then exit 0; fi
+      ;;
+  esac
+  sleep 1
+done
+'''
+    try:
+        guest(c, name, ['timeout', '90', 'bash', '-c', probe])
+    except RuntimeError as e:
+        raise RuntimeError('Guest systemd/D-Bus readiness failed for ' + name +
+                           '; retained instance needs inspection.\n' + str(e)) from e
+
+
 def push(c, name, source, dest):
     p.run(['incus', 'file', 'push', source, 'local:' + name + dest, '--project', c['project']])
 
