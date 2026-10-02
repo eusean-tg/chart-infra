@@ -12,10 +12,16 @@ applications. Host/image administration belongs to the operator.
 
 ## Establish the target
 
-Read `~/.config/chart-box/box.json` on the laptop. It records `box`, `ssh`,
+Use the user's explicit mapping path first. Otherwise inspect
+`~/.config/chart-box/box.json` and regular `~/.config/chart-box/*.json` files;
+match the recorded box/repository to the task. Ask which target to use if multiple
+mappings match. Do not create a replacement just because `box.json` is absent.
+The mapping records `box`, `ssh`,
 `source_root`, `repos` (absolute laptop path to destination name) and `sessions`
 (destination name to owned session ID). Use its explicit `--config` if the
-user selected another box. Do not invent a mapping when the file is absent;
+user selected another box. Pass the chosen `--config` on every helper invocation;
+the helper does not auto-discover mappings and refuses symlinked config paths.
+For a first single-box setup, prefer `box.json`. If no mapping exists,
 follow the [developer guide](../../incus/DEVELOPER.md) with operator-supplied SSH
 host-key fingerprint and developer-selected checkout paths.
 
@@ -31,7 +37,7 @@ relevant session through the helper and require success, then run over recorded
 SSH. For a recorded Orange checkout, adapt the repository's actual test command:
 
 ```sh
-python3 <skill-directory>/scripts/sync.py flush --repo orange-v2-backend
+python3 <skill-directory>/scripts/sync.py flush --config <selected-config> --repo orange-v2-backend
 ssh <recorded-ssh-target> 'bash -lc "cd /srv/chart/source/orange-v2-backend; . /opt/nvm/nvm.sh; nvm use; pnpm test"'
 ```
 

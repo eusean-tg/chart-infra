@@ -5,6 +5,14 @@ the operator owns the host, network boundary, OS image and HDD backups. Discover
 project setup from each repository's README/agent instructions. Reference examples
 below are starting points, not an enforced application contract.
 
+Before setup, inspect existing mappings/sessions and collect unresolved choices
+with the developer: checkout paths and wanted exclusions; data source and actual
+database names; private npm/env/dev-key sources; existing supervisor or systemd;
+and the frontend's backend/proxy settings. Reuse decisions already supplied.
+Record these in the developer's private box notes. Keep operator instructions
+separate from a laptop-agent-owned results note so concurrent agents do not
+rewrite the same handoff while executing it.
+
 ## 1. Establish the box and laptop mapping
 
 Get the box name and SSH host-key fingerprint from the operator. Compare the
@@ -32,6 +40,10 @@ ln -s /absolute/chart-infra/skills/chart-box ~/.codex/skills/chart-box
 The helper needs Python 3.11+ and Mutagen 0.18.1 on the laptop. Do not replace
 unrelated Mutagen sessions or daemon-login preferences. Discover every checkout's
 absolute path; do not assume `~/workspace`. Inspect Syncthing and other sync roots.
+Discover regular `~/.config/chart-box/*.json` mappings before creating one. Match
+their box/repo to the task; resolve ambiguous targets with the developer. Prefer
+`box.json` for a first single box; preserve an existing named mapping and pass its
+`--config` on every helper call. Config symlinks are refused by the helper.
 
 ## 2. Pair repositories
 
@@ -50,6 +62,8 @@ separate `--config` supports another box. New sessions start paused. Setup refus
 source overlap with other Mutagen sessions or discoverable Syncthing folders,
 and refuses existing included source at a fresh destination. Existing pilot
 sessions require a deliberate migration; do not point this helper at their paths.
+Inspect prior sessions only if present; if already retired, cite their recorded
+disposition instead of recreating their mapping or running retirement again.
 
 New ordinary files (for example `src/feature.ts`) sync immediately without
 `git add` or a commit. Only the private-pattern exception depends on Git tracking.
@@ -58,6 +72,10 @@ excluded. Untracked `.env*`, PEM/key files, `.npmrc` and `.netrc` are excluded;
 `.sample`/`.example` templates and tracked files matching private patterns are
 included. The helper does not inspect their contents or decide whether the repo
 should commit them. Ignored box-side paths are retained. Symlinks are not mirrored.
+The helper has no per-repo extra-ignore setting. Inspect its policy before pairing;
+record accepted repository noise rather than editing a shared policy mid-session.
+Source files were observed as `0600 root` in acceptance. The helper sets no mode
+override; choose and verify permissions explicitly before using a non-root runtime.
 
 Tracked exceptions are captured at setup/refresh because Mutagen's ignore policy
 is fixed per session. **Pause before changing tracking status or switching branches
@@ -101,6 +119,15 @@ and keys over SCP, adjust Mongo/cache/service URLs for the box topology, and ret
 existing private material before replacing it. This is agent-led configuration,
 not an env importer or a source patch. Tracked env examples remain unchanged.
 
+Review env settings without printing values. Use the current sample's key layout,
+overlay developer settings, then inspect developer-only keys against source,
+package scripts, loaders and dynamically constructed names. Classify ambiguous
+keys for review rather than deleting them on a failed text search. Apply box URLs,
+actual imported database names and key paths; parse using the application's own
+loader. Key counts help detect omissions but do not prove valid values. Compare
+key names and required settings, then verify startup. Copy only referenced dev
+keys; do not copy production-labelled or unrelated credentials automatically.
+
 For nightly HDD coverage, keep private copies under
 `/srv/chart/data/private/<repo>/` and link excluded paths such as `.env.local` or
 untracked `keys/` into the source directory, if the application supports that.
@@ -128,8 +155,15 @@ Reference Mongo/Dragonfly shape:
   This file-descriptor ceiling does not reserve memory or set a CPU/memory limit.
 - Dragonfly can use `/data` on HDD with a developer-selected snapshot policy and
   password. Stop/snapshot behavior belongs to that Compose project.
-- Bind ports to `127.0.0.1` for box-local access or the box's Tailscale IP for
-  Compass/laptop access. Compass URI shape:
+- The accepted unprivileged box rejects unlimited `memlock`; omit that ulimit
+  rather than granting host privileges. Dragonfly can fall back from io_uring to
+  epoll. Check actual authenticated protocol health as well as container status.
+- Publish Docker ports on `127.0.0.1` for box-local access. Use the
+  [Tailscale socket example](reference/tailnet-tcp.md) for laptop access without
+  requiring the Tailscale address when Docker starts. Docker forwarding does not
+  traverse the guest input chain; it is not governed by that chain alone.
+  [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/)
+  Compass URI shape:
   `mongodb://<user>:<password>@<box>:27017/<database>?authSource=admin&directConnection=true`.
   Match `authSource` to where the user was created. Plain TCP over Tailscale needs
   no Mongo CA or resolver configuration.
@@ -145,7 +179,8 @@ services:
   mongo:
     image: ${MONGO_IMAGE} # choose a repository-compatible version/digest
     command: [mongod, --replSet, rs0, --bind_ip_all, --auth, --keyFile, /run/mongo-keyfile]
-    ports: ["${BOX_TAILSCALE_IP}:27017:27017"]
+    ports: ["127.0.0.1:27017:27017"]
+    restart: unless-stopped
     ulimits:
       nofile: {soft: 64000, hard: 64000}
     volumes:
@@ -156,12 +191,23 @@ services:
 This fragment requires prepared keyfile/users and replica initialization; it is
 not a complete unattended bootstrap. The developer's agent supplies the matching
 setup from the selected Mongo image documentation/repository.
+For native box-local apps and loopback-published Mongo, a member address of
+`127.0.0.1:27017` supports replica-set discovery; laptop clients use
+`directConnection=true`. Containerized app clients need a member address reachable
+from their own network namespace. Do not copy a topology's address blindly.
 
 Run backends natively in the mirrored checkout with `pnpm install` and its own
 `pnpm dev` command. Discover service dependencies/ports. Choose a developer-owned
 process supervisor or terminal sessions for persistent processes; record those
 commands privately so later agents can find logs and restart the right service.
 Do not assume a universal `box up`, service unit or Compose service name.
+For boot/crash recovery, systemd is available in the bare box; use the
+[native-app unit example](reference/native-app.service). Compose services can use
+`restart: unless-stopped`; deliberately stopped services stay stopped. Neither a
+restart policy nor unit ordering proves database readiness. Verify the real
+restart path and application retry behavior. Retain copies of developer units
+under `/srv/chart/data/private/systemd/` for HDD backup; `/etc/systemd/system`
+alone is outside its scope.
 
 Boxes have normal Internet egress and developer-owned keys. Live integration work
 is the developer's responsibility, as on their laptop. The shared k3s restrictions
@@ -174,6 +220,12 @@ application database names. Preserve the original archive; copy it over SCP and
 verify checksums. Use `mongorestore --archive=<path> --gzip` for a gzip archive,
 with the developer's target URI supplied privately. Select application namespaces
 with `--nsInclude`; add reviewed `--nsFrom`/`--nsTo` mappings when needed.
+Choose the data source with the developer before arranging an export. Match each
+app's database setting to the actual source namespace; a wrong name can silently
+create an empty database. `mongodump` has no `--nsInclude`: use `--db` for a single
+database or filter a full-instance archive during restore. Full-instance exports
+can contain source authentication data; keep the archive private.
+[MongoDB dump options](https://www.mongodb.com/docs/database-tools/mongodump/)
 
 Prefer an empty application database/data directory for first import. Restoring
 into existing data or using `--drop` needs an explicit decision about overwriting
@@ -191,8 +243,19 @@ infrastructure dataset registry or adoption CLI.
 3. Reinstall dependencies in the box after dependency changes, following the repo.
 4. Run Vite locally with its API proxy aimed at `http://<box>:3000` (or the chosen
    backend port). Plain HTTP over Tailscale is the pilot default; HTTPS is separate.
+   For kiyotaka-frontend, inspect `VITE_BACKEND_DOMAIN` and
+   `VITE_CME_SNAPSHOT_PROXY_TARGET` in its current configuration. Preserve old values
+   before switching. General Tailscale HTTPS needs the tailnet admin's setting.
 5. Verify hot reload, login (including the repository's dev email-code flow), and
    workspace save/reload. Those are application checks performed by the developer.
+   Sign in using an identity from the chosen data source; pilot fixture users are
+   not expected in a developer's own dump.
+
+For restart acceptance, coordinate a brief interruption and run `systemctl reboot`
+inside the developer's own box. Verify a changed boot ID, SSH, service readiness,
+sync and saved data afterwards. Do not restart the shared host. Operator recovery
+is needed if the box cannot return. Keep the laptop results in their separate
+results note; fold accepted findings into the maintained guides and vault evidence.
 
 If an edit is missing, check sync status, pause/connectivity/errors, then flush and
 compare content before blaming a watcher. Preserve conflicts; never switch to

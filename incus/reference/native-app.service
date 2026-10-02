@@ -1,0 +1,16 @@
+[Unit]
+Description=Developer-owned native app (adapt repository and runtime)
+Wants=network-online.target
+After=network-online.target docker.service tailscaled.service
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/chart/source/your-repo
+Environment=HOME=/root
+ExecStart=/bin/bash -c '. /opt/nvm/nvm.sh && nvm use default && exec pnpm dev'
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

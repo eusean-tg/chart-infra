@@ -16,7 +16,8 @@ application assumptions into host/image gates or introduce an application box CL
   for agent-led setup. No application source, service images, npm credentials,
   source pins or seeded dependency generations belong in the image.
 - Use skills/chart-box/scripts/sync.py on the laptop for arbitrary repositories.
-  Discover paths; read ~/.config/chart-box/box.json. Flush and verify before remote
+  Discover paths and existing ~/.config/chart-box/*.json mappings; pass the selected
+  --config on every helper invocation. Flush and verify before remote
   work that depends on edits. Preserve unrelated sessions and configuration.
 - Laptop mirrors are source-owned by the laptop. Create private configuration and generated
   dependencies in the box as needed. Tracked files are not secret-scanned;
