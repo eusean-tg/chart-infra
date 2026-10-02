@@ -61,6 +61,7 @@ python3 tests/incus_prep.py
 python3 tests/incus_backing.py
 python3 tests/incus_apps.py
 python3 tests/incus_sync.py
+python3 tests/incus_image.py
 ```
 
 See [verification boundaries](docs/OPERATIONS.md#verification) before running tests that contact the cluster or create fixtures. Read [AGENTS.md](AGENTS.md) before modifying this project.

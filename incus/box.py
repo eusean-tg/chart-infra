@@ -174,8 +174,8 @@ def dependency(w, service, frozen=False):
     return r
 
 
-def npm_token():
-    path = b.safe(b.ROOT / 'identity/npmrc')
+def npm_token(path=None):
+    path = b.safe(Path(path) if path is not None else b.ROOT / 'identity/npmrc')
     b.require(path.stat().st_uid == 0 and path.stat().st_mode & 0o077 == 0, 'npmrc must be root-owned mode 0600')
     lines = path.read_text().splitlines()
     b.require(len(lines) == 1 and lines[0].startswith('//registry.npmjs.org/:_authToken='), 'Use the reviewed single-registry npmrc')
@@ -184,7 +184,7 @@ def npm_token():
     return path, token
 
 
-def install_deps(w, service, attempt):
+def install_deps(w, service, attempt, *, npmrc_path=None, artifact_labels=None):
     name(attempt)
     src = source_record(w, service, frozen=True)
     if src['kind'] == 'mirror':
@@ -204,12 +204,13 @@ def install_deps(w, service, attempt):
             old = b.read(record)
             volume(old['volume'], old['labels'])
             b.require(old['key'] != k or old['image'] != image, 'Dependency volume incomplete; inspect retained state')
-    npmrc, token = npm_token()
+    npmrc, token = npm_token(npmrc_path)
     capacity()
     mount = json.loads(b.run(['findmnt', '-J', '-T', '/run', '-o', 'FSTYPE']))['filesystems'][0]
     b.require(mount['fstype'] == 'tmpfs', 'Installer credential projection requires tmpfs /run')
     vol = f'chart-deps-{service}-{k[:12]}-{attempt}'
-    labels = {b.LABEL: OWNER, 'chart-infra.box': __import__('socket').gethostname(), 'chart-infra.key': k}
+    labels = artifact_labels if artifact_labels is not None else {
+        b.LABEL: OWNER, 'chart-infra.box': __import__('socket').gethostname(), 'chart-infra.key': k}
     present = b.run(['docker', 'volume', 'ls', '-q', '--filter', 'name=^' + vol + '$'])
     b.require(not present, 'Dependency attempt already exists; retain it and choose another --attempt after inspection')
     args = ['docker', 'volume', 'create']

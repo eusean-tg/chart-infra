@@ -29,8 +29,17 @@ table inet chart_input {
 EOF
 # The host supplies exact package=version arguments from versions.lock.json.
 test "$#" -eq 5
-apt-get update
-apt-get install --yes --no-remove --no-install-recommends "$@" ./tailscale.deb
+if test "${CHART_FROM_IMAGE:-0}" = 1; then
+  test -f /var/lib/chart-seed/manifest.json
+  for chart_package in "$@"; do
+    test "$(dpkg-query -W -f='${Version}' "${chart_package%%=*}")" = "${chart_package#*=}"
+  done
+  ssh-keygen -A
+  systemctl unmask ssh.service ssh.socket tailscaled.service
+else
+  apt-get update
+  apt-get install --yes --no-remove --no-install-recommends "$@" ./tailscale.deb
+fi
 cat > /usr/local/sbin/chart-input <<'EOF'
 #!/bin/sh
 set -eu
@@ -82,7 +91,12 @@ After=chart-input.service
 ExecStart=
 ExecStart=/usr/sbin/tailscaled --state=/srv/chart/data/identity/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
 EOF
-install -d -m 700 /srv/chart/source /srv/chart/cache/pnpm /srv/chart/data/datasets /srv/chart/data/backups
+install -d -m 700 /srv/chart/data/datasets /srv/chart/data/backups
+for chart_directory in /srv/chart/source /srv/chart/cache/pnpm; do
+  if ! test -d "$chart_directory"; then
+    install -d -m 700 "$chart_directory"
+  fi
+done
 systemctl daemon-reload
 systemctl enable --now chart-input.service
 sshd -t

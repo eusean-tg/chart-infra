@@ -35,6 +35,14 @@ session at a bundle. Read the named handoff for any explicitly retired sessions.
 Browser offline isolation is optional for Incus; backend runtime restrictions remain. Environment imports follow
 the agent-reviewed procedure in `incus/APPS.md`, with private retained backups.
 
+For seeded Incus images, follow `incus/IMAGES.md`. Prepare immutable inputs as the
+authenticated developer; build and verify with host operator sudo. Keep candidates
+private and unaliased until the two-box gates pass. `--promote` records intent for
+verification, not permission to update existing boxes. Preserve tracked source
+templates, exclude private config, and generate independent runtime identities.
+Retained-data adoption, dump import and general golden-image onboarding remain
+separate implementation work.
+
 Read the checkout's `AGENTS.md` and `README.md`. Discover its location rather than assuming every developer uses `~/workspace`. With this skill inside the checkout, the repository root is two directories above the skill directory; an installed copy requires an explicit checkout path.
 
 Run the bundled helper on the PC:

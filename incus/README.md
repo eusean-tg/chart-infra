@@ -10,6 +10,8 @@ Use [Box applications](APPS.md) for source bundles, Linux dependencies, private
 configuration, app startup and synthetic login/workspace checks.
 Use [Laptop source synchronization](SOURCE-SYNC.md) for box-aware Mutagen pairing,
 freeze, retained bundle handover and activation.
+Use [Seeded images](IMAGES.md) for explicit input preparation, private candidate
+builds, two-box acceptance and gated alias promotion.
 
 `prep.py` uses Python's standard library. Preparation requires a host operator
 with sudo; developers receive root inside their own box only. Do not grant host
@@ -33,8 +35,8 @@ deletes retained storage. There is no teardown/prune command. No CPU/memory limi
 are configured. Instances have `boot.autostart=false`.
 
 These are preparation commands, not an accepted deployment. Live nested-Docker,
-firewall, storage and restart checks are required on the target host. A sanitized
-golden-image publisher and named-dataset switching remain separate implementation work. Do not publish a
+firewall, storage and restart checks are required on the target host. Image publication uses the separate workflow above. Named-dataset switching and
+retained-data adoption remain separate implementation work. Do not publish a
 provisioned developer box as a golden image: it contains private identities.
 
 ## 1. Inspect and select the host
