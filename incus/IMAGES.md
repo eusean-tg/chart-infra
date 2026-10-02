@@ -181,6 +181,53 @@ Preserve HDD directories, archives and evidence unless their deletion is explici
 authorized. Keep the working managed pilot until its replacement's application,
 sync and data acceptance pass. No cleanup is performed by this fixture.
 
+## Published artifact, network boundaries and test retirement
+
+After recovery passes, use the retained pair for final image/network checks:
+
+```sh
+python3 tests/bare_boundary_live.py --config "$CHART_HOST_CONFIG" \
+  --build "$CHART_BUILD" --retire-tests
+sudo python3 tests/bare_boundary_live.py --config "$CHART_HOST_CONFIG" \
+  --build "$CHART_BUILD" --retire-tests --apply
+```
+
+The command requires the matching verified image and completed recovery receipt.
+It exports the published image and verifies the unified tarball's SHA-256 against
+the fingerprint. Inspection streams the archive without extraction or booting:
+machine-id must be empty, the bare-image marker must match, source must be empty,
+and SSH host keys, authorized keys, Tailscale state, root npm/netrc credentials,
+shell history and provisioning directories must be absent. It checks these named
+infrastructure artifacts, not arbitrary application files for secret content.
+The archive layout and identifier follow the
+[Incus image format](https://linuxcontainers.org/incus/docs/main/reference/image_format/).
+
+An offline-compiled static TCP fixture runs in a scratch Docker image on each test
+box, publishing IPv4 port 38081 on all box addresses. No registry image is pulled.
+Positive controls prove local and host/peer Tailscale access. Negative probes check
+host-to-box and peer-to-peer bridge access; a temporary host listener tests
+box-to-host bridge denial. Existing firewall rules are recorded, not modified.
+These probes do not packet-test forwarding to a separate physical LAN machine or
+k3s destination, IPv6 service publication, or laptop browser access. Named fixture
+containers are removed after the checks; source and fixture images are retained.
+
+`--retire-tests` performs cleanup only after every check passes. Each test box gets
+a stopped HDD backup and rootfs export. The command logs it out of Tailscale, stops
+it gracefully, detaches its HDD device, and deletes only that test instance.
+HDD directories, images, archives, proof receipts and the stopped rootfs retained
+by the recovery test remain. `sean-dev-pilot` is never selected. Omitting the flag
+runs checks without instance retirement.
+
+Evidence and per-instance retirement phases live under
+`/var/lib/chart-incus/boundary-proofs/<build>/`. An existing proof directory refuses
+blind reruns; inspect failed/partial state before recovery.
+
+Tailnet inventory removal is separate from local instance deletion/logout. The
+command prints the exact test names and node IDs for removal by a tailnet Owner,
+Admin or IT admin through the console or API. Until that removal is confirmed,
+device cleanup is incomplete. See
+[Tailscale device removal](https://tailscale.com/docs/features/access-control/device-management/how-to/remove).
+
 ## Recreate while retaining identity and data
 
 Coordinate a pause of every laptop session targeting the box. The operator then
