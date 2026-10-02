@@ -61,3 +61,7 @@ evidence, investigations and roadmap in /home/sean/obsidian/vault/Chart Infra us
 its index conventions. Distinguish implemented tools, automated checks, operator
 execution and laptop/user acceptance. Inspect integration tests before execution;
 use isolated fixtures and never reset existing datasets to pass a test.
+Record persistent out-of-repo staging, caches, exports and one-off helper paths in
+the vault's artifact inventory when creating them. Include purpose, sensitivity,
+owner and cleanup condition; update the record after cleanup. A cache location is
+not deletion authorization. Keep reusable helpers in this repository.

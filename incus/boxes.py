@@ -67,13 +67,15 @@ def main():
     parser.add_argument('command', choices=['create', 'recreate'])
     parser.add_argument('--config', required=True); parser.add_argument('--box', required=True)
     parser.add_argument('--image', required=True, help='Verified immutable bare-image fingerprint')
-    parser.add_argument('--ssh-key'); parser.add_argument('--sync-paused', action='store_true')
+    parser.add_argument('--ssh-key', action='append', help='Public-key file; repeat for each authorized device')
+    parser.add_argument('--sync-paused', action='store_true')
     parser.add_argument('--apply', action='store_true')
     a = parser.parse_args(); c = p.config(a.config); p.check_host(c); p.box_name(a.box)
     p.require(len(a.image) == 64 and all(x in '0123456789abcdef' for x in a.image), 'Supply a full fingerprint')
     key = None
     if a.command == 'create':
-        p.require(a.ssh_key, 'Supply the developer public key'); key = p.public_key(a.ssh_key)
+        p.require(a.ssh_key, 'Supply the developer public key')
+        key = ''.join(dict.fromkeys(p.public_key(path) for path in a.ssh_key))
     else: p.require(a.sync_paused, 'Coordinate and pause laptop sessions before recreation; acknowledge with --sync-paused')
     if not a.apply:
         print('Plan:', a.command, a.box, 'from', a.image, '; preserve HDD identity; no application setup.'); return

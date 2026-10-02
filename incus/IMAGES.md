@@ -92,6 +92,10 @@ existing instance or retained HDD directory. No application is installed or
 started. Enroll the box using the printed command and the developer's own account
 in the team tailnet. No auth key belongs in the script or repository.
 
+Repeat `--ssh-key /absolute/path/device.pub` for each authorized laptop/operator
+device. Each file must contain one OpenSSH public key; duplicate keys are removed.
+Only public keys are copied. Recreation retains the box's authorized-key set.
+
 Give the laptop agent the box name, SSH host-key fingerprint and developer guide.
 Verify both operator/laptop `tailscale ping` and SSH; confirm intended teammate
 API access separately against tailnet ACLs. Host Incus access stays with operators.

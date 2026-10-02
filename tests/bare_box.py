@@ -70,6 +70,29 @@ class BareBox(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'Retained data'):
                 image.create({'boxes_root': str(self.root), 'project': 'p', 'machine_id': 'm', 'hdd_uuid': 'u'}, 'test', 'fp', None, None)
 
+    def test_create_authorizes_multiple_devices_and_rejects_invalid_extra_key(self):
+        public = []
+        for name in ('laptop', 'operator'):
+            path = self.root / name
+            subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', str(path)], check=True)
+            public.append(str(path) + '.pub')
+        argv = ['boxes.py', 'create', '--config', 'fixture', '--box', 'test-dev',
+                '--image', 'a' * 64, '--apply']
+        for path in [*public, public[0]]: argv.extend(['--ssh-key', path])
+        with patch.object(sys, 'argv', argv), patch.object(image.p, 'STATE', self.root / 'state'), \
+             patch.object(image.p, 'config', return_value={'project': 'fixture'}), \
+             patch.object(image.p, 'check_host'), patch.object(image.p, 'locked', contextlib.nullcontext), \
+             patch.object(h, 'host'), patch.object(boxes, 'scripts', return_value=self.root), \
+             patch.object(image, 'create') as create, contextlib.redirect_stdout(io.StringIO()):
+            boxes.main()
+            authorized = create.call_args.args[3].read_text().splitlines()
+            self.assertEqual(authorized, [' '.join(Path(path).read_text().split()[:2]) for path in public])
+            create.reset_mock()
+            bad = self.root / 'invalid.pub'; bad.write_text('not a public key\n')
+            with patch.object(sys, 'argv', [*argv, '--ssh-key', str(bad)]):
+                with self.assertRaisesRegex(RuntimeError, 'OpenSSH public key'): boxes.main()
+            create.assert_not_called()
+
     def test_readiness_waits_for_systemd_and_bus(self):
         with patch.object(h, 'guest') as guest:
             h.wait_ready({}, 'test')

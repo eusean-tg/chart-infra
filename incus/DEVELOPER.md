@@ -123,6 +123,9 @@ Reference Mongo/Dragonfly shape:
   the selected image; create your own users/passwords. Do not reuse operator keys.
 - Retain a `mongo/member-0` directory on HDD if adding members later is useful.
   Select the repository's compatible Mongo version and explicit cache tuning.
+- Set Mongo's soft/hard `nofile` ceiling to 64000 and check the running process.
+  The inherited 1024 ceiling failed during the chart applications' schema setup.
+  This file-descriptor ceiling does not reserve memory or set a CPU/memory limit.
 - Dragonfly can use `/data` on HDD with a developer-selected snapshot policy and
   password. Stop/snapshot behavior belongs to that Compose project.
 - Bind ports to `127.0.0.1` for box-local access or the box's Tailscale IP for
@@ -143,6 +146,8 @@ services:
     image: ${MONGO_IMAGE} # choose a repository-compatible version/digest
     command: [mongod, --replSet, rs0, --bind_ip_all, --auth, --keyFile, /run/mongo-keyfile]
     ports: ["${BOX_TAILSCALE_IP}:27017:27017"]
+    ulimits:
+      nofile: {soft: 64000, hard: 64000}
     volumes:
       - /srv/chart/data/my-project/mongo/member-0:/data/db
       - /srv/chart/data/private/mongo-keyfile:/run/mongo-keyfile:ro
