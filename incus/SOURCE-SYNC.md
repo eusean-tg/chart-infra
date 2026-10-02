@@ -22,6 +22,10 @@ application helper dependencies in `/opt/chart-infra/incus/`. Retain prior helpe
 Copy `laptop_sync.py`, `sync_policy.py` and `sync_common.py` together into a
 separate laptop tools directory. Reuse the verified Mutagen binary/agent bundle;
 no daemon registration, account creation or box listener is needed.
+`sync_policy.py` prefers the sibling `sync_common.py`; the repository layout uses
+the parent copy only when no sibling exists. Copy the three helper files together
+when upgrading. A packaging-only update with an unchanged policy hash requires
+no session recreation or new freeze checkpoint.
 
 For a selected workspace, coordinate an app stop before handover. Mongo/cache
 remain running. Inside the box, using actual values:

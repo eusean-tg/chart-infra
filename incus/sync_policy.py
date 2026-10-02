@@ -4,7 +4,9 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+helper_dir = Path(__file__).resolve().parent
+common_dir = helper_dir if (helper_dir / 'sync_common.py').is_file() else helper_dir.parent
+sys.path.insert(0, str(common_dir))
 import sync_common as common
 
 POLICY = 'chart-mutagen-box-v1'

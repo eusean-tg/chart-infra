@@ -4,6 +4,8 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -59,6 +61,16 @@ class Handover(unittest.TestCase):
         self.assertNotEqual(policy.policy_hash(), policy.common.policy_hash())
         self.assertEqual(policy.common.configuration()['permissions']['defaultFileMode'], '0600')
         self.assertEqual(policy.configuration()['permissions']['defaultFileMode'], '0644')
+
+    def test_copied_helpers_prefer_their_sibling_common_module(self):
+        tools = self.root / 'tools'
+        tools.mkdir()
+        shutil.copy2(policy.__file__, tools / 'sync_policy.py')
+        shutil.copy2(policy.common.__file__, tools / 'sync_common.py')
+        (self.root / 'sync_common.py').write_text('raise RuntimeError("wrong parent helper")')
+        result = subprocess.check_output([sys.executable, '-c',
+            'import sync_policy; print(sync_policy.policy_hash())'], cwd=tools, text=True)
+        self.assertEqual(result.strip(), policy.policy_hash())
 
     def test_handover_retains_original_and_other_bundles(self):
         original = Path(self.records['auth']['path'])
