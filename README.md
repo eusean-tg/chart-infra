@@ -1,18 +1,27 @@
 # Chart infrastructure
 
-Chart-infra runs the chart application's TypeScript backends on a registered shared development PC. Developers run the frontend and their coding agent on a laptop; Mutagen sends backend source over SSH to HDD mirrors mounted by k3s.
+Chart-infra supplies personal Ubuntu 26.04 Incus boxes, Tailscale connectivity,
+laptop-to-box Mutagen sync and retained HDD backup tools. Developers run their
+agents and edit repositories on laptops; their agents configure and operate
+applications as root inside their own unprivileged boxes. Source/dependencies use
+the SSD pool; retained data belongs under `/srv/chart/data` on HDD.
 
-The parallel [Incus pilot preparation](incus/README.md) provides host and Ubuntu 26.04 box preparation commands. Its source/dependencies use a bounded SSD pool and retained data uses HDD. The k3s lifecycle below remains independent; preparing a box does not migrate applications or change laptop sync sessions.
+The bare image contains generic development tools. It contains no chart source,
+service images or app credentials. The operator does not prescribe application
+versions, environment files, dependencies or startup/egress rules inside boxes.
 
-Each application profile contains auth, Tharamine, Orange, an authenticated Dragonfly cache, and a single-member MongoDB replica set. The environment supports offline sign-in and saved workspaces. Live market data, external delivery, billing and production integrations are outside its operating scope.
+The retained k3s runner and Sean's managed Incus application pilot remain available
+for their existing deployments. Their application contracts are legacy references,
+not the onboarding model for personal boxes.
 
 ## Start here
 
 | Task | Guide |
 | --- | --- |
-| Prepare the parallel Ubuntu 26.04 Incus host/box foundation | [Incus preparation](incus/README.md) |
-| Run Mongo and Dragonfly in a prepared Incus box | [Incus backing services](incus/BACKING.md) |
-| Prepare and run auth, Tharamine and Orange in an Incus box | [Box applications](incus/APPS.md) |
+| Prepare the Ubuntu 26.04 Incus host and personal boxes | [Incus preparation](incus/README.md) |
+| Build a generic image, create/recreate boxes and schedule backups | [Bare image and lifecycle](incus/IMAGES.md) |
+| Set up projects in a personal box | [Developer agent guide](incus/DEVELOPER.md) |
+| Run remote tests, inspect logs or sync code | [Chart-box skill](skills/chart-box/SKILL.md) |
 | Connect a frontend, edit code, inspect Mongo, start or stop a prepared profile | [Getting started](docs/GETTING-STARTED.md) |
 | Configure source synchronization or import development environment settings with an agent | [Agent onboarding](docs/AGENT-ONBOARDING.md) |
 | Prepare runtime/dependencies, inspect storage and understand commands | [Operations reference](docs/OPERATIONS.md) |
@@ -21,7 +30,7 @@ Each application profile contains auth, Tharamine, Orange, an authenticated Drag
 
 The repository is the source of truth for reusable operating instructions and code. The Obsidian knowledge base holds installation-specific facts, reviews, rollout evidence and plans.
 
-## Lifecycle
+## Retained k3s lifecycle
 
 Run from this checkout as the prepared profile's operator. Replace `your-profile` explicitly; command defaults differ between subsystems.
 
@@ -37,7 +46,7 @@ CHART_PROFILE=your-profile
 
 Mongo uses replica set `rs0`, one data-bearing member and keyfile authentication. Laptop clients use a Tailscale IP and profile port with `directConnection=true`; Pods use cluster DNS and `replicaSet=rs0`. Mongo requires no TLS certificate, SRV record or resolver configuration. Chart routes bind the registered Tailscale IP and restrict source addresses to the Tailscale range.
 
-## Implementation boundaries
+## Retained k3s implementation boundaries
 
 - Backend source and Linux dependencies reside under `/mnt/hdd/shared-dev/profiles/<profile>/`. Private identities and runtime configuration stay outside source synchronization and Git.
 - Workloads declare no CPU or memory requests or limits. Mongo's WiredTiger cache flag is application tuning; PV storage capacity is directory-backed volume metadata.
@@ -61,7 +70,7 @@ python3 tests/incus_prep.py
 python3 tests/incus_backing.py
 python3 tests/incus_apps.py
 python3 tests/incus_sync.py
-python3 tests/incus_image.py
+python3 tests/bare_box.py
 ```
 
 See [verification boundaries](docs/OPERATIONS.md#verification) before running tests that contact the cluster or create fixtures. Read [AGENTS.md](AGENTS.md) before modifying this project.

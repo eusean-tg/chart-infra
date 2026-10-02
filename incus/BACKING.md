@@ -1,5 +1,9 @@
 # Incus backing services
 
+Legacy reference for Sean's existing managed pilot. Personal-box onboarding uses
+[the developer guide](DEVELOPER.md); do not install this managed application
+contract into a bare box. Preserve the running pilot until explicit migration.
+
 `backing.py` operates Mongo and the chart stack's separate Dragonfly inside a
 prepared unprivileged box. Run it as root **inside that box**, over its verified
 SSH connection. It explicitly targets the box's local Docker socket. The host's

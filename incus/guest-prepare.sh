@@ -29,17 +29,8 @@ table inet chart_input {
 EOF
 # The host supplies exact package=version arguments from versions.lock.json.
 test "$#" -eq 5
-if test "${CHART_FROM_IMAGE:-0}" = 1; then
-  test -f /var/lib/chart-seed/manifest.json
-  for chart_package in "$@"; do
-    test "$(dpkg-query -W -f='${Version}' "${chart_package%%=*}")" = "${chart_package#*=}"
-  done
-  ssh-keygen -A
-  systemctl unmask ssh.service ssh.socket tailscaled.service
-else
-  apt-get update
-  apt-get install --yes --no-remove --no-install-recommends "$@" ./tailscale.deb
-fi
+apt-get update
+apt-get install --yes --no-remove --no-install-recommends "$@" ./tailscale.deb
 cat > /usr/local/sbin/chart-input <<'EOF'
 #!/bin/sh
 set -eu

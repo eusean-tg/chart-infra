@@ -1,5 +1,9 @@
 # Box applications
 
+Legacy reference for Sean's existing managed pilot. Personal-box onboarding uses
+[the developer guide](DEVELOPER.md); do not install this managed application
+contract into a bare box. Preserve the running pilot until explicit migration.
+
 `box.py` prepares and operates auth, Tharamine and Orange inside an enrolled
 Incus box. Run it as box root over verified SSH. Read [preparation](README.md)
 and [backing services](BACKING.md) first. These commands do not operate k3s.

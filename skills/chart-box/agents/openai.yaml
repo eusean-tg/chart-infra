@@ -1,0 +1,4 @@
+interface:
+  display_name: "Chart Box"
+  short_description: "Sync and operate projects in your remote dev box"
+  default_prompt: "Use $chart-box to flush my backend source and run its tests in my development box."

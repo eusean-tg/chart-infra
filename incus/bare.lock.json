@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "nvm": {
+    "version": "0.40.3",
+    "files": {
+      "nvm.sh": {
+        "url": "https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/nvm.sh",
+        "sha256": "390260ab9eb1da20e8bc0ebea2ee90f528d53e5e9f6e13b16717db4af454df9d"
+      },
+      "nvm-exec": {
+        "url": "https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/nvm-exec",
+        "sha256": "e6b7a2bafac6994e1ba14282cff82c75476fba0788f68a9ecf558dfdf3331621"
+      },
+      "bash_completion": {
+        "url": "https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/bash_completion",
+        "sha256": "b7eb3bf03d59b61e451957b020640aa55fe8bf47fb39d85d244e259f445d2fbe"
+      }
+    }
+  },
+  "packages": {
+    "build-essential": "12.12ubuntu2.26.04.2",
+    "python3": "3.14.3-0ubuntu2",
+    "git": "1:2.53.0-1ubuntu1",
+    "curl": "8.18.0-1ubuntu2.7",
+    "jq": "1.8.1-4ubuntu2",
+    "ca-certificates": "20260601~26.04.1"
+  }
+}

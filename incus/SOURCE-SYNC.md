@@ -1,5 +1,9 @@
 # Laptop source synchronization
 
+Legacy reference for Sean's existing managed pilot. Personal-box onboarding uses
+[the developer guide](DEVELOPER.md); do not install this managed application
+contract into a bare box. Preserve the running pilot until explicit migration.
+
 Use `incus/laptop_sync.py` on the developer's laptop and `incus/box_sync.py`
 inside their prepared box. Mutagen **0.18.1** transfers one repo per recorded
 session, laptop to box in one-way-safe mode. Each repo can use a mirror while

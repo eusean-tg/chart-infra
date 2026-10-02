@@ -1,43 +1,30 @@
 # Incus preparation
 
-This directory prepares an Ubuntu 26.04 host foundation and an unprivileged Ubuntu
-26.04 developer box. The existing `./chart` commands operate k3s profiles; they do
-not operate these boxes. Mutagen over SSH is the box source transport.
+This directory supplies the host foundation and generic Ubuntu 26.04 personal
+boxes. The infrastructure owns OS provisioning, Tailscale/SSH connectivity,
+source transport and HDD backups. Developers own all applications inside their
+unprivileged boxes and have root there. Their agents work from laptops.
 
-After preparation and enrollment, use [Backing services](BACKING.md) for the
-separate Mongo/Dragonfly preparation, startup, retention and verification commands.
-Use [Box applications](APPS.md) for source bundles, Linux dependencies, private
-configuration, app startup and synthetic login/workspace checks.
-Use [Laptop source synchronization](SOURCE-SYNC.md) for box-aware Mutagen pairing,
-freeze, retained bundle handover and activation.
-Use [Seeded images](IMAGES.md) for explicit input preparation, private candidate
-builds, two-box acceptance and gated alias promotion.
+Read [Bare images and lifecycle](IMAGES.md) for image build, two-instance
+acceptance, box creation/recreation and backups. Read [Developer-agent setup](DEVELOPER.md)
+for repositories, Mutagen pairing, private configuration and daily use. The
+[chart-box skill](../skills/chart-box/SKILL.md) guides laptop agents during remote
+work. Legacy `APPS.md`, `BACKING.md` and `SOURCE-SYNC.md` apply only to Sean's
+retained managed pilot, not personal-box onboarding.
 
-`prep.py` uses Python's standard library. Preparation requires a host operator
-with sudo; developers receive root inside their own box only. Do not grant host
-Incus, Docker or Kubernetes access to enable laptop operations.
+`prep.py` prepares the host and checks storage/network identity. Its base-image
+`box-create`/`box-provision` path remains for the existing pilot. Personal-box
+creation uses `boxes.py` with an explicitly verified bare-image fingerprint.
+Host mutations need operator sudo; developers receive only box-root SSH.
+No CPU/memory caps or reservations are configured. Instances use
+`boot.autostart=false`. Stopping retains their files; application startup inside
+a running personal box belongs to its developer.
 
-## Scope
-
-| Command | Effect |
-| --- | --- |
-| `inspect` | Read host identity, mount, route and capacity information |
-| `fetch` | Download and checksum public Ubuntu image and Tailscale artifacts into an explicit cache directory |
-| `host-prepare` | Plan by default; `--apply` installs pinned host packages, creates the SSD pool/project/bridge, installs firewall rules with a Tailscale LAN exception and applies persistent inotify settings |
-| `host-tune` | Plan by default; `--apply` upgrades the recognized installed firewall for LAN direct connections and applies the inotify settings without reinstalling packages or changing storage |
-| `box-create` | Plan by default; `--apply` imports the pinned image and creates a **stopped** box with an isolated UID map, TUN and its own HDD attachment |
-| `box-provision` | Plan by default; `--apply` starts that box, inherits the host timezone and installs Docker/Compose, unenrolled Tailscale, key-only SSH and the guest input firewall |
-| `status` | Read capacity and image/instance inventory; with sudo, include pool and btrfs allocation details |
-
-No preparation command fetches application source, imports environment files, creates Mongo
-data, starts applications, enrolls Tailscale, changes laptop sync sessions or
-deletes retained storage. There is no teardown/prune command. No CPU/memory limits
-are configured. Instances have `boot.autostart=false`.
-
-These are preparation commands, not an accepted deployment. Live nested-Docker,
-firewall, storage and restart checks are required on the target host. Image publication uses the separate workflow above. Named-dataset switching and
-retained-data adoption remain separate implementation work. Do not publish a
-provisioned developer box as a golden image: it contains private identities.
+No image command fetches repositories, selects backend versions, installs npm
+packages, scans repository secrets or enforces application egress. Personal boxes
+have normal public-network egress subject to the host boundary below. Shared k3s
+capture restrictions remain independent. No existing pilot, data or sync session
+is automatically migrated or retired.
 
 ## 1. Inspect and select the host
 
@@ -142,48 +129,30 @@ conflicting LAN/sysctl configuration. No host or box reboot is required. Verify
 the effective values with `sysctl fs.inotify.max_user_instances
 fs.inotify.max_user_watches` on both host and box after applying.
 
-## 3. Create and provision the box
+## 3. Build the bare image and create boxes
 
-Obtain the developer's intended public SSH key. Do not copy every key from the
-host's `authorized_keys`. No private SSH key belongs in the box or repository.
+Follow [IMAGES.md](IMAGES.md). The generic builder uses the verified Ubuntu and
+Tailscale artifacts above plus pinned nvm/tooling inputs. It publishes a private
+candidate and creates two test instances with independent HDD/SSH/Tailscale
+identities. Acceptance yields an immutable fingerprint for `boxes.py create`.
+No application stack or source seed is included.
 
-```sh
-python3 incus/prep.py box-create --config "$CHART_HOST_CONFIG" \
-  --name "$CHART_BOX" --ssh-key "$CHART_SSH_KEY" --artifacts "$CHART_ARTIFACTS"
-sudo python3 incus/prep.py box-create --config "$CHART_HOST_CONFIG" \
-  --name "$CHART_BOX" --ssh-key "$CHART_SSH_KEY" --artifacts "$CHART_ARTIFACTS" --apply
-sudo python3 incus/prep.py box-provision --config "$CHART_HOST_CONFIG" \
-  --name "$CHART_BOX" --artifacts "$CHART_ARTIFACTS" --apply
-sudo python3 incus/prep.py status --config "$CHART_HOST_CONFIG"
-```
-
-Box creation uses no inherited Incus profiles. The root disk is SSD-backed;
-`/mnt/hdd/shared-dev/boxes/<box>` is attached at `/srv/chart/data` with required,
-idmapped access. Existing data without its registered instance is refused rather
-than reinitialized. Preparation never recursively changes host ownership.
-
-Box provisioning reads the host timezone with `timedatectl` and passes it to the
-guest setup. The setting belongs in per-box provisioning so a future golden
-image cannot impose another host's timezone. Existing boxes can use
-`timedatectl set-timezone <host-timezone>` over authorized box SSH. This changes
-local time display, not the shared kernel clock; applications that explicitly
-log UTC retain their own formatting. Golden-image publication is not implemented.
+Provisioning uses the developer's selected public key and the host timezone.
+Enrollment uses that developer's account in the existing team tailnet. Retained
+data without a matching instance is refused by ordinary creation; planned
+recreation uses explicit backup, old-rootfs retention and HDD identity adoption.
 
 | Inside the box | Storage |
 | --- | --- |
-| `/srv/chart/source/<workspace>/<repo>` | SSD source mirror |
-| `/srv/chart/cache/pnpm` | Independent SSD package store |
-| `/var/lib/docker`, `/var/lib/containerd` | SSD images, runtime state and dependency volumes |
-| `/srv/chart/data/datasets/<dataset>/mongo/member-0` | Retained HDD database path; created by explicit backing-service preparation |
-| `/srv/chart/data/identity` | Retained HDD SSH host keys, Tailscale state, package inventory and future app identities |
-| `/srv/chart/data/backups` | Retained HDD exports |
+| `/srv/chart/source/<repo>` | SSD source mirror |
+| nvm, node_modules, package caches, Docker data | SSD rootfs |
+| `/srv/chart/data` | Required retained per-box HDD attachment |
+| `/srv/chart/data/identity` | Retained SSH host keys and Tailscale state |
+| Host `shared-dev/backups/boxes/<stamp>/<box>` | Nightly HDD copies and explicit rootfs exports |
 
-APT runs only during explicit preparation. Its periodic guest upgrade timers
-are disabled to keep package changes deliberate. Repeated `box-create` verifies
-and retains a matching instance. Completed `box-provision` refuses to rerun as
-an implicit package upgrade. Interrupted preparation retains its state for
-inspection; it does not destroy a failed box. A differing root-installed script
-or host configuration requires an explicit operator-reviewed update.
+APT upgrades remain explicit. Guest package timers are disabled. Incus preparation
+never recursively rewrites host HDD ownership. Check idmapped access and retained
+identity before treating recreation as accepted.
 
 ## 4. Prove the foundation before enrollment and apps
 
@@ -221,56 +190,18 @@ bootstrap checks. The host cannot SSH to the box's bridge address by design.
 
 ## Mutagen handoff
 
-An operator agent on the PC needs its own explicitly authorized SSH key to run
-commands inside the box. The laptop key does not authorize a different PC key.
-Adding a PC key grants box-root access only; it does not grant host Incus or sudo
-access. Preserve the laptop's existing authorized key. Discover and verify the
-intended PC public-key fingerprint before adding it.
+Give the laptop agent the box name, trusted SSH host-key fingerprint,
+[developer guide](DEVELOPER.md), and `skills/chart-box/` with its helper scripts.
+Discover checkout paths; pairing uses root SSH and `/srv/chart/source/<repo>`.
+There is no daemon in the box beyond Mutagen's SSH-started agent, no Syncthing
+pairing, and no application-side activation helper.
 
-For an approved additional public key, use the host operator's authenticated
-terminal. Set `CHART_BOX`, `CHART_OPERATOR_KEY` and `CHART_HOST_KEY_REPORT` to
-explicit values; the last path receives only the box's public host key:
-
-```sh
-sudo incus exec "local:$CHART_BOX" --project chart-dev -- sh -eu -c '
-  IFS= read -r chart_key
-  test -n "$chart_key"
-  test -f /srv/chart/data/identity/guest-prepared
-  test -f /root/.ssh/authorized_keys
-  test ! -L /root/.ssh/authorized_keys
-  test -s /srv/chart/data/identity/ssh/ssh_host_ed25519_key.pub
-  if ! grep -qxF -- "$chart_key" /root/.ssh/authorized_keys; then
-    printf "%s\n" "$chart_key" >> /root/.ssh/authorized_keys
-  fi
-  cat /srv/chart/data/identity/ssh/ssh_host_ed25519_key.pub
-' < "$CHART_OPERATOR_KEY" > "$CHART_HOST_KEY_REPORT"
-```
-
-Compare that trusted public host key with the network-presented key, then record
-it in the operator's dedicated known-hosts file. Require strict host-key checking
-and use the selected operator identity. A raw `ssh-keyscan` result alone is not
-trusted verification. Record additional authorized-key fingerprints privately;
-retain the original laptop key and account for both during box reconstruction.
-
-Use laptop Mutagen **0.18.1** with independent, recorded pilot session IDs. It
-starts its remote agent over SSH; no Syncthing service, pairing or port 22000 is
-needed. Discover laptop paths and prefer separate pilot worktrees so controlled
-edits cannot reload the existing k3s profile. Destinations are
-`root@<box>:/srv/chart/source/<workspace>/<repo>`.
-
-Reuse the inclusion/exclusion semantics in `sync_common.py`: one-way-safe,
-SHA-256, ignored symlinks, no `.git`, dependencies, build outputs, private dotenv
-files, keys or credentials, with the documented sample/template exceptions.
-Do not paste raw defaults or invent a subtly different secret exclusion policy.
-Inspect existing laptop sessions before adding only these new destinations.
-
-The existing `laptop-sync.py` activation protocol targets k3s and is not a box
-controller. A box-aware helper still needs implementation and real watcher
-acceptance. Until then, do not mark a raw pause as a frozen generation. Initial
-activation and dependency changes require flush, pause of only the owned
-sessions, included-file fingerprint equality across all three repos, and stopped
-app writers. Resume only those sessions after dependencies and selection are
-ready. Test save/rename/delete/reconnect and each actual `tsx watch` process.
+The helper records owned sessions and Git-tracked private-pattern exceptions in
+`~/.config/chart-box/box.json`. It checks overlaps, flushes and verifies content,
+and provides explicit policy refresh. Preserve existing pilot sessions until the
+laptop agent deliberately migrates them; their source layout/protocol differs.
+An operator who needs box SSH must have an explicitly authorized public key;
+the developer's laptop key does not authorize the PC agent.
 
 ## Capacity and retention
 
@@ -282,9 +213,9 @@ any level. Pause optional heavy work at 85% pool usage or earlier btrfs
 allocation pressure. Preparation is conservative and refuses at the review
 threshold. There is no background monitoring or automatic cleanup.
 
-An Incus snapshot excludes the attached HDD data. Mongo needs independent
-consistent backups; restoring a rootfs snapshot requires source sync paused and
-schema/dependency compatibility checked. Never clone enrolled identities into
+An Incus snapshot excludes the attached HDD data. The scheduled HDD copy stops the box; application-aware dumps are a developer
+choice. Restoring a rootfs snapshot requires coordinated source sync and review
+of the developer's application/data compatibility. Never clone enrolled identities into
 another running box. Stop retains all data; deletion requires an explicit named
 target. Existing k3s data and historical Mongo/DNS pilots are outside these
 commands.
@@ -325,6 +256,7 @@ Node-execution check. No host Docker restart is needed for either check.
 
 ```sh
 python3 tests/incus_prep.py
+python3 tests/bare_box.py
 python3 -m py_compile incus/prep.py incus/firewall.py incus/runtime-proof.py
 bash -n incus/guest-prepare.sh
 ```
