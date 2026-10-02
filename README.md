@@ -12,6 +12,7 @@ Each application profile contains auth, Tharamine, Orange, an authenticated Drag
 | --- | --- |
 | Prepare the parallel Ubuntu 26.04 Incus host/box foundation | [Incus preparation](incus/README.md) |
 | Run Mongo and Dragonfly in a prepared Incus box | [Incus backing services](incus/BACKING.md) |
+| Prepare and run auth, Tharamine and Orange in an Incus box | [Box applications](incus/APPS.md) |
 | Connect a frontend, edit code, inspect Mongo, start or stop a prepared profile | [Getting started](docs/GETTING-STARTED.md) |
 | Configure source synchronization or import development environment settings with an agent | [Agent onboarding](docs/AGENT-ONBOARDING.md) |
 | Prepare runtime/dependencies, inspect storage and understand commands | [Operations reference](docs/OPERATIONS.md) |

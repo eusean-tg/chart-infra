@@ -84,6 +84,7 @@ class Backing(unittest.TestCase):
 
     def test_retained_mounts_offline_and_on_demand(self):
         spec = b.compose_spec(self.inv)
+        self.assertEqual(spec['services']['mongo']['ulimits']['nofile'], {'soft': 64000, 'hard': 64000})
         self.assertTrue(spec['networks']['runtime']['internal'])
         self.assertNotIn('ports', spec['services']['redis'])
         for s in spec['services'].values():
@@ -121,6 +122,17 @@ class Backing(unittest.TestCase):
         with patch.object(b, 'run', side_effect=['', 'net', json.dumps([network])]):
             with self.assertRaisesRegex(RuntimeError, 'Other runtime clients'):
                 b.ownership('test-box')
+
+    def test_registered_app_cannot_gain_external_network(self):
+        ident = 'a' * 64
+        (self.state / 'app-clients.json').write_text(json.dumps({
+            'owner': 'chart-incus-apps-v1', 'box': 'test-box', 'containers': {ident: 'auth'}}))
+        app = {'Config': {'Labels': {b.LABEL: 'chart-incus-apps-v1', 'chart-infra.box': 'test-box',
+                 'com.docker.compose.project': 'chart-apps', 'com.docker.compose.service': 'auth'}},
+               'NetworkSettings': {'Networks': {'chart-backing-runtime': {}, 'bridge': {}}}}
+        with patch.object(b, 'run', side_effect=[ident, json.dumps([app])]):
+            with self.assertRaisesRegex(RuntimeError, 'another network'):
+                b.registered_clients('test-box')
 
 
 if __name__ == '__main__':

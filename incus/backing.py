@@ -110,6 +110,7 @@ def compose_spec(inv):
               'stop_grace_period': '60s', 'pull_policy': 'never',
               'logging': {'driver': 'json-file', 'options': {'max-size': '10m', 'max-file': '3'}}}
     mongo = {**common, 'image': IMAGES['mongo'], 'hostname': 'mongo',
+             'ulimits': {'nofile': {'soft': 64000, 'hard': 64000}},
              'entrypoint': ['mongod'],
              'command': ['--bind_ip_all', '--port', '27017', '--replSet', 'rs0', '--auth',
                          '--keyFile', '/run/chart/keyfile', '--dbpath', '/data/db',
@@ -155,13 +156,37 @@ def ownership(box):
         labels = obj['Config'].get('Labels') or {}
         require(labels.get(LABEL) == OWNER and labels.get('chart-infra.box') == box,
                 'Foreign Compose container; refusing mutation')
+    clients = registered_clients(box)
     networks = run(['docker', 'network', 'ls', '-q', '--filter', 'name=^' + PROJECT + '-runtime$']).split()
     for ident in networks:
         obj = json.loads(run(['docker', 'network', 'inspect', ident]))[0]
         require(obj['Internal'] and obj['Labels'].get(LABEL) == OWNER
                 and obj['Labels'].get('chart-infra.box') == box, 'Foreign/externally connected runtime network')
-        require(set(obj.get('Containers', {})).issubset(set(ids)),
+        require(set(obj.get('Containers', {})).issubset(set(ids) | {c['Id'] for c in clients}),
                 'Other runtime clients are attached; stop them before backing lifecycle operations')
+    return clients
+
+
+def registered_clients(box):
+    path = STATE / 'app-clients.json'
+    if not path.exists():
+        return []
+    record = read(path)
+    require(record['owner'] == 'chart-incus-apps-v1' and record['box'] == box, 'Wrong app-client registration')
+    existing = set(run(['docker', 'ps', '-aq', '--no-trunc']).split())
+    result = []
+    for ident, service in record['containers'].items():
+        require(re.fullmatch(r'[a-f0-9]{64}', ident) and service in ('auth', 'tharamine', 'orange'), 'Invalid app-client identity')
+        if ident not in existing:
+            continue
+        obj = json.loads(run(['docker', 'inspect', ident]))[0]
+        labels = obj['Config'].get('Labels') or {}
+        require(labels.get(LABEL) == 'chart-incus-apps-v1' and labels.get('chart-infra.box') == box
+                and labels.get('com.docker.compose.project') == 'chart-apps'
+                and labels.get('com.docker.compose.service') == service, 'Foreign registered app client')
+        require(set(obj['NetworkSettings']['Networks']) == {PROJECT + '-runtime'}, 'App client attached to another network')
+        result.append(obj)
+    return result
 
 
 def compose(*args):
@@ -367,7 +392,7 @@ def main():
     marker = guard(a.box)
     with open('/run/lock/chart-backing.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        ownership(a.box)
+        clients = ownership(a.box)
         if a.command == 'status':
             inv = inventory(a.box, marker)
             print(json.dumps({'box': a.box, 'dataset': inv['dataset'], 'phase': inv['phase'],
@@ -385,6 +410,11 @@ def main():
             print('Pinned public images fetched; no deployment change.')
         else:
             inv = inventory(a.box, marker)
+            require(not any(c['State']['Running'] for c in clients),
+                    f'Stop app writers first: python3 /opt/chart-infra/incus/box.py stop --box {a.box} --apply')
+            if a.command == 'down':
+                require(not clients,
+                        f'Remove app containers first: python3 /opt/chart-infra/incus/box.py down --box {a.box} --apply; retained data is preserved')
             if a.command == 'up':
                 up(inv)
             else:

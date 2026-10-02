@@ -78,6 +78,13 @@ print(JSON.stringify({mongoVersion:db.version(),primary:db.hello().isWritablePri
         b.require(set(obj['NetworkSettings']['Networks']) == {b.PROJECT + '-runtime'}, 'Unexpected runtime network')
         b.require(not h['PortBindings'], 'Unexpected Docker port publication')
         b.require(obj['State'].get('Health', {}).get('Status') == 'healthy', service + ' health check not passing')
+        if service == 'mongo':
+            limits = {v['Name']: v for v in (h.get('Ulimits') or [])}
+            b.require(limits.get('nofile') == {'Name': 'nofile', 'Soft': 64000, 'Hard': 64000},
+                      'Mongo open-file capacity differs')
+            b.require(b.run(['docker', 'exec', obj['Id'], 'sh', '-c', 'ulimit -n']) == '64000',
+                      'Effective Mongo open-file ceiling differs')
+            result['mongoOpenFiles'] = 64000
     # A controlled listener on the guest's own Tailscale IP proves runtime denial without vendor traffic.
     with socket.socket() as listener:
         listener.bind((inv['tailscale_ip'], 0))

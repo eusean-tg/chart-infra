@@ -5,10 +5,12 @@ prepared unprivileged box. Run it as root **inside that box**, over its verified
 SSH connection. It explicitly targets the box's local Docker socket. The host's
 TSDB, Kafka, Go cache and existing k3s chart profiles remain independent.
 
-Application backends, source sync, named-dataset switching and backup restoration
-require separate implementation. These commands operate one explicitly prepared
-dataset per box. They refuse a different selection or other clients attached to
-the backing network. There is no data deletion or pruning operation.
+Application backends use [Box applications](APPS.md). Box-aware source sync,
+named-dataset switching and backup restoration require separate implementation.
+These commands operate one explicitly prepared dataset per box. Registered app
+writers must stop before backing lifecycle changes; remove their containers with
+`box.py down` before backing `down`. Unknown network clients are refused. There
+is no data deletion or pruning operation.
 
 ## Install and prepare
 
@@ -53,6 +55,9 @@ pulling; neither startup nor teardown selects a newer image. There are no CPU or
 memory limits or reservations. Mongo's WiredTiger cache is explicitly 0.5 GiB,
 with a 256 MiB oplog. Dragonfly uses cache mode and one proactor thread; its own
 memory/eviction behavior is separate from Docker resource limits.
+Mongo's soft/hard open-file ceiling is 64000, following
+[MongoDB's ulimit guidance](https://www.mongodb.com/docs/v8.0/reference/ulimit/).
+This supports app collection/index initialization without reserving RAM.
 
 ## Storage and identities
 
@@ -108,8 +113,8 @@ transfer it privately into Compass or local configuration. Mongo requires no TLS
 certificate, resolver entry or SRV lookup. Dragonfly is not published to laptops.
 The plain Mongo route is encrypted in transit by Tailscale.
 
-The backing network has no external route. Application exposure and its egress
-policy require separate implementation when the backend stack is added. Do not
+The backing network has no external route. Registered apps use this same network;
+Orange has its own Tailscale-bound forwarder described in [APPS.md](APPS.md). Do not
 attach an Internet-capable network to these database containers to publish a port.
 
 ## Daily lifecycle
@@ -121,6 +126,8 @@ python3 /opt/chart-infra/incus/backing.py stop --box "$(hostname)" --apply
 ```
 
 `stop` saves a Dragonfly snapshot, stops the Mongo listener and stops containers.
+Stop app writers with `box.py stop` first. Backing `down` also requires
+`box.py down` so app endpoints do not retain the owned network.
 It fails before teardown if the cache snapshot cannot be saved. `up` waits for
 authenticated readiness and health checks, then opens the Mongo listener. It
 pulls no images, fetches no source and runs no application migrations or collectors.
