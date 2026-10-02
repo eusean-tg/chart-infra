@@ -7,6 +7,10 @@ mountpoint -q /srv/chart/data
 test -f /srv/chart/data/.chart-incus-box.json
 test -c /dev/net/tun
 test -f authorized_key
+test "$#" -eq 6
+chart_timezone=$1
+shift
+timedatectl set-timezone "$chart_timezone"
 
 # Guest firewall is independent of Docker's forwarding chains.
 cat > /etc/chart-input.nft <<'EOF'

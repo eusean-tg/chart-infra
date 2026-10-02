@@ -6,10 +6,12 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import sys
 import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "incus"))
 
 
 def load(name):
@@ -120,11 +122,43 @@ class Guards(unittest.TestCase):
 
     def test_plan_does_not_apply(self):
         with patch.object(prep, "check_host"), patch.object(prep, "capacity", return_value={}), \
+             patch.object(prep, "resolve_lan", return_value="192.168.100.0/24"), \
              patch.object(prep, "run") as run, patch.object(prep, "query") as query, \
              patch("builtins.print"):
             prep.host_prepare(self.c, False)
             run.assert_not_called()
             query.assert_not_called()
+
+    def test_host_tune_plan_does_not_apply(self):
+        with patch.object(prep, "check_host"), patch.object(prep, "resolve_lan", return_value="192.168.100.0/24"), \
+             patch.object(prep, "run") as run, patch.object(prep, "write_tuning") as write, patch("builtins.print"):
+            prep.host_tune(self.c, "192.168.100.0/24", False)
+            run.assert_not_called()
+            write.assert_not_called()
+
+    def test_lan_is_connected_uplink_only(self):
+        routes = [{"dst": "default", "gateway": "192.168.100.1", "dev": "eno1"},
+                  {"dst": "192.168.100.0/24", "dev": "eno1", "scope": "link"},
+                  {"dst": "10.42.0.0/24", "dev": "cni0", "scope": "link"}]
+        self.assertEqual(prep.check_lan(self.c, "192.168.100.0/24", routes), "192.168.100.0/24")
+        for cidr in ("10.42.0.0/24", "10.200.0.0/24", "0.0.0.0/0", "192.168.0.0/16"):
+            with self.subTest(cidr=cidr), self.assertRaises(RuntimeError):
+                prep.check_lan(self.c, cidr, routes)
+        with patch.object(prep, "run", return_value=json.dumps(routes)):
+            self.assertEqual(prep.resolve_lan(self.c), "192.168.100.0/24")
+
+    def test_lan_ambiguity_fails(self):
+        routes = [{"dst": "default", "gateway": "192.168.100.1", "dev": "eno1"},
+                  {"dst": "192.168.100.0/24", "dev": "eno1", "scope": "link"},
+                  {"dst": "10.1.0.0/24", "dev": "eno1", "scope": "link"}]
+        with patch.object(prep, "run", return_value=json.dumps(routes)), self.assertRaises(RuntimeError):
+            prep.resolve_lan(self.c)
+
+    def test_inotify_applies_only_dedicated_file(self):
+        with patch.object(prep, "run", side_effect=["", "1024\n", "1048576\n"]) as run:
+            prep.apply_inotify()
+            self.assertEqual(run.call_args_list[0].args[0],
+                             ["sysctl", "--load", "/etc/sysctl.d/99-chart-incus-inotify.conf"])
 
     def test_artifact_corruption_fails_without_network(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -146,6 +180,20 @@ class Guards(unittest.TestCase):
     def test_firewall_rejects_identifier_injection(self):
         with self.assertRaises(ValueError):
             firewall.rules({**self.c, "bridge": 'x"; flush ruleset;'})
+
+    def test_lan_exception_is_udp_from_fixed_box_port(self):
+        body = firewall.rules({**self.c, "lan_ipv4_cidrs": ["192.168.100.0/24"]})
+        input_chain = body.split("chain forward")[0]
+        self.assertLess(input_chain.index("ct state established,related accept"), input_chain.index('iifname "chartbr0" reject'))
+        forward = body.split("chain forward", 1)[1].split("chain output", 1)[0]
+        line = next(l for l in forward.splitlines() if "192.168.100.0/24" in l)
+        self.assertIn("udp sport 41641 accept", line)
+        self.assertNotIn("tcp", line)
+        self.assertLess(forward.index("CloudflareWARP"), forward.index(line))
+        self.assertLess(forward.index(line), forward.index("192.168.0.0/16"))
+        for cidr in ("0.0.0.0/0", "10.200.0.0/24", "192.168.100.0/24; flush ruleset"):
+            with self.subTest(cidr=cidr), self.assertRaises(ValueError):
+                firewall.rules({**self.c, "lan_ipv4_cidrs": [cidr]})
 
     def test_firewall_install_orders_nft_before_forward_accept(self):
         calls = []

@@ -21,6 +21,7 @@ OWNER = "chart-incus-v1"
 HOST_CONFIG = Path("/etc/chart-incus/host.json")
 STATE = Path("/var/lib/chart-incus")
 HOST_PACKAGES = ("incus-base", "incus-client", "btrfs-progs", "uidmap", "iptables", "nftables", "dnsmasq-base")
+INOTIFY_SETTINGS = "# Chart development file watchers.\nfs.inotify.max_user_instances = 1024\nfs.inotify.max_user_watches = 1048576\n"
 
 
 def require(condition, message):
@@ -170,13 +171,15 @@ def capacity(c):
     return report
 
 
-def host_prepare(c, apply):
+def host_prepare(c, apply, lan_cidr=None):
     check_host(c)
+    lan_cidr = resolve_lan(c, lan_cidr)
     report = capacity(c)
     print(json.dumps({"capacity": report, "host_packages": {p: PINS["packages"][p] for p in HOST_PACKAGES},
                       "create": {"pool": c["pool"], "size": c["pool_size"], "bridge": c["bridge_address"],
                                  "project": c["project"], "boxes": c["boxes_root"]},
-                      "firewall": "bridge-only nft restrictions, scoped iptables acceptance, systemd reconciliation",
+                      "firewall": "bridge restrictions, Tailscale LAN UDP, scoped iptables acceptance, systemd reconciliation",
+                      "lan_cidr": lan_cidr, "inotify_instances": 1024, "inotify_watches": 1048576,
                       "mode": "apply" if apply else "plan"}, indent=2))
     if not apply:
         return
@@ -227,9 +230,11 @@ def host_prepare(c, apply):
         write_owned(HOST_CONFIG, json.dumps(c, indent=2) + "\n")
         write_owned("/usr/local/lib/chart-incus/firewall.py", (HERE / "firewall.py").read_text(), 0o700)
         write_owned("/etc/systemd/system/chart-incus-firewall.service", (HERE / "chart-incus-firewall.service").read_text(), 0o644)
+        write_tuning(lan_cidr)
         run(["systemctl", "daemon-reload"])
         run(["systemctl", "enable", "--now", "chart-incus-firewall.service"], capture=False)
         run(["systemctl", "reload", "chart-incus-firewall.service"], capture=False)
+        apply_inotify()
         resource("networks", c["bridge"], {"type": "bridge", "config": {**owned,
             "ipv4.address": c["bridge_address"], "ipv4.nat": "true", "ipv4.firewall": "false",
             "ipv6.address": "none", "ipv6.firewall": "false", "dns.mode": "none"}})
@@ -264,6 +269,84 @@ def artifacts(directory, fetch=False):
                 combined.update(block)
     require(combined.hexdigest() == PINS["image"]["fingerprint"], "Combined Incus fingerprint mismatch")
     return directory
+
+
+def check_lan(c, cidr, routes):
+    network = ipaddress.IPv4Network(cidr)
+    require(any(network.subnet_of(ipaddress.IPv4Network(n)) for n in
+                ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")), "LAN must be RFC1918")
+    require(not network.overlaps(ipaddress.IPv4Interface(c["bridge_address"]).network), "LAN overlaps box bridge")
+    uplinks = {r.get("dev") for r in routes if r.get("dst") == "default" and r.get("gateway")}
+    require(any(r.get("dst") == str(network) and r.get("scope") == "link" and r.get("dev") in uplinks
+                and r.get("dev") not in {c["bridge"], "tailscale0", "CloudflareWARP", "docker0", "cni0", "flannel.1"}
+                for r in routes), "LAN must match a connected subnet on a main-table default uplink")
+    return str(network)
+
+
+def resolve_lan(c, cidr=None):
+    routes = json.loads(run(["ip", "-j", "-4", "route", "show", "table", "main"]))
+    if cidr:
+        return check_lan(c, cidr, routes)
+    candidates = set()
+    for row in routes:
+        if row.get("scope") != "link":
+            continue
+        try:
+            candidates.add(check_lan(c, row["dst"], routes))
+        except (RuntimeError, ValueError):
+            pass
+    require(len(candidates) == 1, "Cannot select one LAN automatically; supply --lan-cidr for the intended connected LAN")
+    return candidates.pop()
+
+
+def write_tuning(cidr):
+    write_owned("/etc/chart-incus/lan.json", json.dumps({"ipv4_cidrs": [cidr]}, indent=2) + "\n")
+    write_owned("/etc/sysctl.d/99-chart-incus-inotify.conf", INOTIFY_SETTINGS, 0o644)
+
+
+def apply_inotify():
+    # Apply only the requested keys; leave unrelated host sysctls untouched.
+    run(["sysctl", "--load", "/etc/sysctl.d/99-chart-incus-inotify.conf"], capture=False)
+    for name, value in (("max_user_instances", "1024"), ("max_user_watches", "1048576")):
+        require(run(["sysctl", "-n", "fs.inotify." + name]).strip() == value, "Inotify setting did not apply")
+
+
+def host_tune(c, cidr, apply):
+    from firewall import TABLE, rules
+    check_host(c)
+    cidr = resolve_lan(c, cidr)
+    print(json.dumps({"mode": "apply" if apply else "plan", "lan": cidr,
+                      "allow": "established bridge replies; UDP source 41641 to the selected LAN",
+                      "inotify_instances": 1024, "inotify_watches": 1048576}, indent=2))
+    if not apply:
+        return
+    with locked():
+        require(json.loads(HOST_CONFIG.read_text()) == c, "Registered host config differs")
+        installed = Path("/usr/local/lib/chart-incus/firewall.py")
+        no_symlinks(installed)
+        expected = {"f9a894eb14ad29337990ce2c53b2bbf7d10af4c51d78fb5b8485f1d3cf075fa7", digest(HERE / "firewall.py")}
+        require(installed.is_file() and digest(installed) in expected,
+                "Installed firewall has unrecognized edits; review before replacing it")
+        # Check the complete atomic nft transaction before updating installed files.
+        body = f"delete table inet {TABLE}\n" + rules({**c, "lan_ipv4_cidrs": [cidr]})
+        run(["nft", "--check", "-f", "-"], input=body)
+        lan = Path("/etc/chart-incus/lan.json")
+        settings = Path("/etc/sysctl.d/99-chart-incus-inotify.conf")
+        for path in (lan, settings):
+            no_symlinks(path)
+        require(not lan.exists() or json.loads(lan.read_text()) == {"ipv4_cidrs": [cidr]},
+                "Existing LAN settings differ; review before changing the exception")
+        require(not settings.exists() or settings.read_text() == INOTIFY_SETTINGS, "Existing chart inotify settings differ")
+        backup = STATE / "firewall-backups" / (digest(installed) + ".py")
+        write_owned(backup, installed.read_text())
+        write_tuning(cidr)
+        with tempfile.NamedTemporaryFile(mode="w", dir=installed.parent, delete=False) as output:
+            output.write((HERE / "firewall.py").read_text())
+            os.chmod(output.name, 0o700)
+        os.replace(output.name, installed)
+        run(["systemctl", "reload", "chart-incus-firewall.service"], capture=False)
+        apply_inotify()
+        print("Host tuning applied. Verify direct Tailscale paths from the PC and a LAN laptop; DERP fallback remains available.")
 
 
 def box_name(value):
@@ -382,7 +465,9 @@ def box_provision(c, args):
             run(["incus", "file", "push", src, f"local:{name}/root/chart-prep/{dst}", "--project", c["project"]])
         selected = [p + "=" + PINS["packages"][p] for p in
                     ("docker.io", "docker-compose-v2", "openssh-server", "nftables", "iptables")]
-        run([*prefix, "env", "DEBIAN_FRONTEND=noninteractive", "bash", "/root/chart-prep/guest-prepare.sh", *selected], capture=False)
+        timezone = run(["timedatectl", "show", "--property=Timezone", "--value"]).strip()
+        require(timezone and Path("/usr/share/zoneinfo", timezone).is_file(), "Host timezone is unavailable")
+        run([*prefix, "env", "DEBIAN_FRONTEND=noninteractive", "bash", "/root/chart-prep/guest-prepare.sh", timezone, *selected], capture=False)
         mapped = query(f"/1.0/instances/{name}?project={c['project']}")
         write_owned(STATE / "boxes" / name / "idmap.json", json.dumps({k: v for k, v in mapped["config"].items()
                     if "idmap" in k}, indent=2) + "\n")
@@ -430,7 +515,7 @@ def main():
     sub.add_parser("inspect")
     fetch = sub.add_parser("fetch", help="Download and verify pinned public artifacts; does not deploy")
     fetch.add_argument("--artifacts", required=True)
-    for name in ("host-prepare", "box-create", "box-provision", "status"):
+    for name in ("host-prepare", "host-tune", "box-create", "box-provision", "status"):
         p = sub.add_parser(name)
         p.add_argument("--config", required=True)
         if name != "status":
@@ -440,6 +525,8 @@ def main():
             p.add_argument("--artifacts", required=True)
         if name == "box-create":
             p.add_argument("--ssh-key", required=True)
+        if name in ("host-tune", "host-prepare"):
+            p.add_argument("--lan-cidr", help="Connected RFC1918 LAN; auto-select only when unambiguous")
     args = parser.parse_args()
     if args.command == "inspect":
         inspect()
@@ -448,7 +535,9 @@ def main():
     else:
         c = config(args.config)
         if args.command == "host-prepare":
-            host_prepare(c, args.apply)
+            host_prepare(c, args.apply, args.lan_cidr)
+        elif args.command == "host-tune":
+            host_tune(c, args.lan_cidr, args.apply)
         elif args.command == "box-create":
             box_create(c, args)
         elif args.command == "box-provision":

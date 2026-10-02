@@ -14,9 +14,10 @@ Incus, Docker or Kubernetes access to enable laptop operations.
 | --- | --- |
 | `inspect` | Read host identity, mount, route and capacity information |
 | `fetch` | Download and checksum public Ubuntu image and Tailscale artifacts into an explicit cache directory |
-| `host-prepare` | Plan by default; `--apply` installs pinned host packages, creates the 200 GiB SSD btrfs pool, project and NAT bridge, and installs bridge-scoped firewall rules |
+| `host-prepare` | Plan by default; `--apply` installs pinned host packages, creates the SSD pool/project/bridge, installs firewall rules with a Tailscale LAN exception and applies persistent inotify settings |
+| `host-tune` | Plan by default; `--apply` upgrades the recognized installed firewall for LAN direct connections and applies the inotify settings without reinstalling packages or changing storage |
 | `box-create` | Plan by default; `--apply` imports the pinned image and creates a **stopped** box with an isolated UID map, TUN and its own HDD attachment |
-| `box-provision` | Plan by default; `--apply` starts that box and installs Docker/Compose, unenrolled Tailscale, key-only SSH and the guest input firewall |
+| `box-provision` | Plan by default; `--apply` starts that box, inherits the host timezone and installs Docker/Compose, unenrolled Tailscale, key-only SSH and the guest input firewall |
 | `status` | Read capacity and image/instance inventory; with sudo, include pool and btrfs allocation details |
 
 No command fetches application source, imports environment files, creates Mongo
@@ -42,6 +43,9 @@ Create a private copy of `host.example.json` outside Git. Set `machine_id` and
 `hdd_uuid` from inspection. Confirm the mount, project, pool name and bridge
 subnet. Example values in the template are not discovery results for another
 machine. The script checks all IPv4 route tables, including VPN routes.
+Host setup selects a single connected private LAN on the main default uplink.
+Use `--lan-cidr <subnet>` when selection is ambiguous; a VPN, box bridge or k3s
+network is not accepted as the LAN.
 
 Set explicit absolute paths for subsequent commands:
 
@@ -84,8 +88,18 @@ byte-identical package-repository snapshot.
 
 The host firewall has its own nftables table, a dedicated iptables forwarding
 chain and three bridge-only DHCP/DNS input rules. Restrictions run before the
-Docker-coexistence accepts. It denies box underlay access to private networks,
-the host management plane, WARP and the host tailnet interface. IPv6 underlay is
+Docker-coexistence accepts. Bridge input accepts established replies, so the
+host's Tailscale hole-punch traffic receives its responses. Forwarding permits
+UDP **source port 41641** from the box bridge to the selected LAN; peer destination
+ports can vary. The guest Tailscale service fixes its listening/source port to
+41641. This exception precedes the private-network rejection and follows the
+sibling-bridge/VPN denials. It does not allow new LAN TCP connections.
+
+Other box underlay access to private networks, host management, WARP and the host
+tailnet interface remains denied. A root user in the box can originate UDP from
+41641; this is a port-scoped exception, not WireGuard packet authentication.
+Tailnet ACLs independently govern traffic inside the encrypted tunnel, including
+box access to the host's Tailscale address. IPv6 underlay is
 disabled; IPv6 inside the Tailscale tunnel remains independent. UDP 41641 is the
 only unsolicited underlay box ingress allowance. NAT Internet access permits
 package preparation; it is **not** application offline-egress enforcement.
@@ -93,8 +107,32 @@ package preparation; it is **not** application offline-egress enforcement.
 The root-owned `chart-incus-firewall.service` reapplies after Docker/Incus
 restarts. It never flushes their tables or shared chains. Inspect effective
 rules and test coexistence; another daemon or workstation firewall can still
-block traffic. LAN peer connections may use Tailscale relays because private
-underlay destinations are blocked. Do not broaden LAN access to bypass a test.
+block traffic. Verify direct connectivity using `tailscale ping <box>` from the
+PC and a LAN laptop; a successful relayed ping does not prove the direct path.
+Tailscale retains DERP fallback for peers that cannot establish a direct path.
+Application ports remain bound to Tailscale addresses; LAN support concerns
+encrypted Tailscale transport, not exposing Mongo or HTTP on the LAN.
+
+Initial host setup persists `fs.inotify.max_user_instances=1024` and
+`fs.inotify.max_user_watches=1048576` in
+`/etc/sysctl.d/99-chart-incus-inotify.conf`. It applies only that file with
+`sysctl --load`; it does not reload unrelated host sysctls. These kernel settings
+belong on the host, outside a golden image, and are visible inside system
+containers. They raise available watch capacity; they do not reserve RAM.
+
+For an already prepared host, use the explicit update operation:
+
+```sh
+sudo python3 incus/prep.py host-tune --config "$CHART_HOST_CONFIG" \
+  --lan-cidr <connected-lan-subnet> --apply
+```
+
+It validates the nftables transaction before installation, retains a copy of the
+recognized prior firewall script, reloads the dedicated firewall service and
+applies the two inotify values. It refuses unrecognized local firewall edits or
+conflicting LAN/sysctl configuration. No host or box reboot is required. Verify
+the effective values with `sysctl fs.inotify.max_user_instances
+fs.inotify.max_user_watches` on both host and box after applying.
 
 ## 3. Create and provision the box
 
@@ -115,6 +153,13 @@ Box creation uses no inherited Incus profiles. The root disk is SSD-backed;
 `/mnt/hdd/shared-dev/boxes/<box>` is attached at `/srv/chart/data` with required,
 idmapped access. Existing data without its registered instance is refused rather
 than reinitialized. Preparation never recursively changes host ownership.
+
+Box provisioning reads the host timezone with `timedatectl` and passes it to the
+guest setup. The setting belongs in per-box provisioning so a future golden
+image cannot impose another host's timezone. Existing boxes can use
+`timedatectl set-timezone <host-timezone>` over authorized box SSH. This changes
+local time display, not the shared kernel clock; applications that explicitly
+log UTC retain their own formatting. Golden-image publication is not implemented.
 
 | Inside the box | Storage |
 | --- | --- |
