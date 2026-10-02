@@ -23,11 +23,14 @@ import artifact_check
 PROBE = '''
 import json, socket, sys
 try:
-    with socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=3) as s:
-        value = s.recv(256).decode()
-    print(json.dumps(dict(connected=True, value=value)))
+    s = socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=3)
 except OSError as e:
     print(json.dumps(dict(connected=False, error=str(e))))
+else:
+    with s:
+        try: result = dict(connected=True, value=s.recv(256).decode())
+        except OSError as e: result = dict(connected=True, read_error=str(e))
+    print(json.dumps(result))
 '''
 
 SERVER = r'''
@@ -67,9 +70,11 @@ def probe(c, source, address, port):
     if source is not None:
         return json.loads(h.guest(c, source, ['python3', '-c', PROBE, address, str(port)]))
     try:
-        with socket.create_connection((address, port), timeout=3) as s: value = s.recv(256).decode()
-        return {'connected': True, 'value': value}
+        s = socket.create_connection((address, port), timeout=3)
     except OSError as e: return {'connected': False, 'error': str(e)}
+    with s:
+        try: return {'connected': True, 'value': s.recv(256).decode()}
+        except OSError as e: return {'connected': True, 'read_error': str(e)}
 
 
 def assert_probe(c, source, address, port, token, allowed):

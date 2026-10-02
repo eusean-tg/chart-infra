@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline artifact inspection and final-test cleanup guards."""
 import importlib.util
+import contextlib
 import io
 import json
 from pathlib import Path
@@ -9,7 +10,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'incus'))
 import artifact_check as a
@@ -65,6 +66,16 @@ class Boundary(unittest.TestCase):
     def test_negative_probe_rejects_any_successful_connection(self):
         with patch.object(b, 'probe', return_value={'connected': True, 'value': 'other-service'}):
             with self.assertRaisesRegex(RuntimeError, 'Unexpected'): b.assert_probe({}, None, '127.0.0.1', 1, 'token', False)
+
+    def test_read_timeout_is_not_misreported_as_network_denial(self):
+        connection = MagicMock(); connection.__enter__.return_value = connection
+        connection.recv.side_effect = TimeoutError('read timeout')
+        with patch.object(b.socket, 'create_connection', return_value=connection):
+            self.assertTrue(b.probe({}, None, '127.0.0.1', 1)['connected'])
+            output = io.StringIO()
+            with patch.object(sys, 'argv', ['probe', '127.0.0.1', '1']), contextlib.redirect_stdout(output):
+                exec(b.PROBE, {})
+            self.assertTrue(json.loads(output.getvalue())['connected'])
 
     def test_retirement_refuses_changed_identity_before_any_mutation(self):
         with patch.object(b, 'endpoint', return_value={'name': 'chart-test-a', 'node_id': 'changed'}), \
