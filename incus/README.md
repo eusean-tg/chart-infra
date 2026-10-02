@@ -157,12 +157,47 @@ bootstrap checks. The host cannot SSH to the box's bridge address by design.
    console; do not put auth keys in scripts, Git, logs or chat. Confirm assigned
    IP/name, tailnet peer policy and reconnection. Do not advertise routes, an
    exit node or Funnel. SSH uses the developer's key, not Tailscale SSH policy.
+   For personal developer boxes, use that developer's account in the existing
+   team tailnet. User ownership and peer network access are separate: verify the
+   tailnet policy permits intended teammate APIs and operator access. Centrally
+   managed tagged boxes require a separate tailnet-admin policy decision.
 6. From the laptop, verify the SSH host-key fingerprint through the host
    operator, then connect as `root@<box>`. This is root inside the unprivileged
    box. Do not disable host-key checking. Verify service access from a teammate
    during application acceptance; successful enrollment is not that proof.
 
 ## Mutagen handoff
+
+An operator agent on the PC needs its own explicitly authorized SSH key to run
+commands inside the box. The laptop key does not authorize a different PC key.
+Adding a PC key grants box-root access only; it does not grant host Incus or sudo
+access. Preserve the laptop's existing authorized key. Discover and verify the
+intended PC public-key fingerprint before adding it.
+
+For an approved additional public key, use the host operator's authenticated
+terminal. Set `CHART_BOX`, `CHART_OPERATOR_KEY` and `CHART_HOST_KEY_REPORT` to
+explicit values; the last path receives only the box's public host key:
+
+```sh
+sudo incus exec "local:$CHART_BOX" --project chart-dev -- sh -eu -c '
+  IFS= read -r chart_key
+  test -n "$chart_key"
+  test -f /srv/chart/data/identity/guest-prepared
+  test -f /root/.ssh/authorized_keys
+  test ! -L /root/.ssh/authorized_keys
+  test -s /srv/chart/data/identity/ssh/ssh_host_ed25519_key.pub
+  if ! grep -qxF -- "$chart_key" /root/.ssh/authorized_keys; then
+    printf "%s\n" "$chart_key" >> /root/.ssh/authorized_keys
+  fi
+  cat /srv/chart/data/identity/ssh/ssh_host_ed25519_key.pub
+' < "$CHART_OPERATOR_KEY" > "$CHART_HOST_KEY_REPORT"
+```
+
+Compare that trusted public host key with the network-presented key, then record
+it in the operator's dedicated known-hosts file. Require strict host-key checking
+and use the selected operator identity. A raw `ssh-keyscan` result alone is not
+trusted verification. Record additional authorized-key fingerprints privately;
+retain the original laptop key and account for both during box reconstruction.
 
 Use laptop Mutagen **0.18.1** with independent, recorded pilot session IDs. It
 starts its remote agent over SSH; no Syncthing service, pairing or port 22000 is
