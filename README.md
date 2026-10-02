@@ -11,6 +11,7 @@ Each application profile contains auth, Tharamine, Orange, an authenticated Drag
 | Task | Guide |
 | --- | --- |
 | Prepare the parallel Ubuntu 26.04 Incus host/box foundation | [Incus preparation](incus/README.md) |
+| Run Mongo and Dragonfly in a prepared Incus box | [Incus backing services](incus/BACKING.md) |
 | Connect a frontend, edit code, inspect Mongo, start or stop a prepared profile | [Getting started](docs/GETTING-STARTED.md) |
 | Configure source synchronization or import development environment settings with an agent | [Agent onboarding](docs/AGENT-ONBOARDING.md) |
 | Prepare runtime/dependencies, inspect storage and understand commands | [Operations reference](docs/OPERATIONS.md) |
@@ -56,6 +57,7 @@ python3 tests/backend_key.py
 python3 tests/mongo_checks.py
 python3 tests/skill_context.py
 python3 tests/incus_prep.py
+python3 tests/incus_backing.py
 ```
 
 See [verification boundaries](docs/OPERATIONS.md#verification) before running tests that contact the cluster or create fixtures. Read [AGENTS.md](AGENTS.md) before modifying this project.

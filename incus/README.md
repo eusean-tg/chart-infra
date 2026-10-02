@@ -4,6 +4,9 @@ This directory prepares an Ubuntu 26.04 host foundation and an unprivileged Ubun
 26.04 developer box. The existing `./chart` commands operate k3s profiles; they do
 not operate these boxes. Mutagen over SSH is the box source transport.
 
+After preparation and enrollment, use [Backing services](BACKING.md) for the
+separate Mongo/Dragonfly preparation, startup, retention and verification commands.
+
 `prep.py` uses Python's standard library. Preparation requires a host operator
 with sudo; developers receive root inside their own box only. Do not grant host
 Incus, Docker or Kubernetes access to enable laptop operations.
@@ -20,14 +23,14 @@ Incus, Docker or Kubernetes access to enable laptop operations.
 | `box-provision` | Plan by default; `--apply` starts that box, inherits the host timezone and installs Docker/Compose, unenrolled Tailscale, key-only SSH and the guest input firewall |
 | `status` | Read capacity and image/instance inventory; with sudo, include pool and btrfs allocation details |
 
-No command fetches application source, imports environment files, creates Mongo
+No preparation command fetches application source, imports environment files, creates Mongo
 data, starts applications, enrolls Tailscale, changes laptop sync sessions or
 deletes retained storage. There is no teardown/prune command. No CPU/memory limits
 are configured. Instances have `boot.autostart=false`.
 
 These are preparation commands, not an accepted deployment. Live nested-Docker,
 firewall, storage and restart checks are required on the target host. A sanitized
-golden-image publisher, Compose stack, dataset switching and box-aware Mutagen
+golden-image publisher, backend application stack, dataset switching and box-aware Mutagen
 freeze/selection helper remain separate implementation work. Do not publish a
 provisioned developer box as a golden image: it contains private identities.
 
@@ -166,7 +169,7 @@ log UTC retain their own formatting. Golden-image publication is not implemented
 | `/srv/chart/source/<workspace>/<repo>` | SSD source mirror |
 | `/srv/chart/cache/pnpm` | Independent SSD package store |
 | `/var/lib/docker`, `/var/lib/containerd` | SSD images, runtime state and dependency volumes |
-| `/srv/chart/data/datasets/<dataset>/mongo/member-0` | Retained HDD database path; created by future explicit dataset initialization |
+| `/srv/chart/data/datasets/<dataset>/mongo/member-0` | Retained HDD database path; created by explicit backing-service preparation |
 | `/srv/chart/data/identity` | Retained HDD SSH host keys, Tailscale state, package inventory and future app identities |
 | `/srv/chart/data/backups` | Retained HDD exports |
 

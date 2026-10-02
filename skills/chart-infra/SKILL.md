@@ -11,6 +11,16 @@ Incus uses SSD source/dependencies and a required per-box HDD data attachment. H
 
 ## Establish context
 
+For prepared Incus boxes, follow `incus/BACKING.md`. Copy the reviewed
+`incus/backing.py` and `incus/backing_checks.py` together into the box; execute
+with its own root SSH identity and explicit `--box`. Image fetch, empty-dataset
+preparation and startup are separate commands. Start/stop/down retain HDD data
+and credentials; stop/down save the Dragonfly snapshot. Use `--expect-existing`
+after restarts to prove retention without recreating persistence tokens. Only one
+selected dataset is implemented; backend apps, box-aware source sync and named
+dataset switching remain separate work. Never invoke these helpers on the PC as
+a substitute for entering the box.
+
 Read the checkout's `AGENTS.md` and `README.md`. Discover its location rather than assuming every developer uses `~/workspace`. With this skill inside the checkout, the repository root is two directories above the skill directory; an installed copy requires an explicit checkout path.
 
 Run the bundled helper on the PC:
