@@ -14,7 +14,7 @@ through an on-demand systemd socket bound to the box Tailscale address and
 ## Install helpers and toolchain
 
 Install matching reviewed copies of `backing.py`, `box.py`, `box_config.py`,
-`app_checks.py` and `backing_checks.py` under `/opt/chart-infra/incus/`.
+`app_checks.py`, `backing_checks.py`, `box_sync.py` and `sync_policy.py` under `/opt/chart-infra/incus/`.
 Install the repository's `sync_common.py` and `runtime/launch.cjs` there too.
 Retain the installed revision before upgrading helpers. Do not overwrite a
 foreign Compose definition, identity receipt or proxy unit to bypass a guard.
@@ -68,10 +68,10 @@ Source lives at `/srv/chart/source/<workspace>/<repo>` on SSD. Source files use
 different named workspace for a different baseline. Neither selection nor
 teardown deletes prior workspaces or modifies a laptop checkout.
 
-Box-aware Mutagen registration/freeze/activation is not implemented by this
-bundle command. Do not sync into a selected bundle or use the k3s controller as
-a box controller. The box policy must remain distinct from k3s's source modes.
-Live laptop save/rename/delete/reconnect acceptance is a separate gate.
+Use [Laptop source synchronization](SOURCE-SYNC.md) to retain a bundle and
+hand its path over to a verified laptop mirror. Do not aim a raw session at a
+bundle or use the k3s controller as a box controller. Mixed bundle/mirror source
+is supported; live Mac save/rename/delete/reconnect acceptance is separate.
 
 ## Prepare dependencies
 
@@ -164,9 +164,10 @@ Repeat login requests respect the app's per-address cooldown; do not reset its
 rate-limit data. Reports under `identity/apps/verification` contain no session
 tokens. These API checks do not establish laptop browser or WebSocket acceptance.
 
-For the Mac browser, retain the offline Vite wrapper from
-`runtime/vite.offline.config.ts`, point its API proxy at `http://<box>:3000`, and
-use the synthetic email. Obtain its recent code over box SSH:
+For the Mac browser, point the frontend API proxy at `http://<box>:3000` and
+use the synthetic email. Normal Vite development mode is supported; the offline
+wrapper is optional and browser-side vendor blocking is not an acceptance gate.
+Obtain the recent code over box SSH:
 
 ```sh
 python3 /opt/chart-infra/incus/box.py login-code --box "$(hostname)" \
@@ -174,9 +175,9 @@ python3 /opt/chart-infra/incus/box.py login-code --box "$(hostname)" \
 ```
 
 Verify sign-in, authenticated navigation, workspace save/reload and persistence
-after app restart and Compose recreation. Confirm browser vendor/market-data
-requests remain blocked. Optional integrations need their own reviewed local
-fixtures/configuration; a healthy login stack does not prove every app feature.
+after app restart and Compose recreation. Keep automated verification on
+synthetic fixtures; do not invoke live APIs as test targets. Optional integrations
+need their own configuration; a healthy login stack does not prove every app feature.
 
 ## Agent-reviewed development environment imports
 

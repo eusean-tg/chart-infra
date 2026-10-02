@@ -8,6 +8,8 @@ After preparation and enrollment, use [Backing services](BACKING.md) for the
 separate Mongo/Dragonfly preparation, startup, retention and verification commands.
 Use [Box applications](APPS.md) for source bundles, Linux dependencies, private
 configuration, app startup and synthetic login/workspace checks.
+Use [Laptop source synchronization](SOURCE-SYNC.md) for box-aware Mutagen pairing,
+freeze, retained bundle handover and activation.
 
 `prep.py` uses Python's standard library. Preparation requires a host operator
 with sudo; developers receive root inside their own box only. Do not grant host
@@ -32,8 +34,7 @@ are configured. Instances have `boot.autostart=false`.
 
 These are preparation commands, not an accepted deployment. Live nested-Docker,
 firewall, storage and restart checks are required on the target host. A sanitized
-golden-image publisher, dataset switching and box-aware Mutagen
-freeze/selection helper remain separate implementation work. Do not publish a
+golden-image publisher and named-dataset switching remain separate implementation work. Do not publish a
 provisioned developer box as a golden image: it contains private identities.
 
 ## 1. Inspect and select the host

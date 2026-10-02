@@ -83,10 +83,17 @@ def workspace(w):
     return b.read(p) if p.exists() else {}
 
 
-def source_record(w, service):
+def source_record(w, service, frozen=False):
     record = workspace(w)[service]
     path = b.safe(SOURCE / w / SERVICES[service][0])
-    b.require(record['path'] == str(path) and record['kind'] == 'bundle', 'Source contract differs')
+    b.require(record['path'] == str(path), 'Source contract differs')
+    if (STATE / 'sync' / w / (service + '.json')).exists():
+        import box_sync
+        b.require(box_sync.read(w, service)['phase'] == 'ready', 'Incomplete source handover; rerun sync prepare')
+    if record['kind'] == 'mirror':
+        import box_sync
+        return box_sync.validate_source(w, service, record, frozen=frozen)
+    b.require(record['kind'] == 'bundle', 'Unknown source contract')
     actual = source_policy.fingerprint(source_policy.manifest(path))
     b.require(actual == record['fingerprint'], 'Baseline source changed; use an explicit workspace, never patch this bundle')
     return record
@@ -157,10 +164,11 @@ def volume(name_, expected):
     return obj
 
 
-def dependency(w, service):
+def dependency(w, service, frozen=False):
     r = b.read(STATE / 'dependencies' / w / (service + '.json'))
-    src = source_record(w, service)
-    b.require(r['image'] == runtime()['image'] and r['key'] == key(Path(src['path']), r['image']), 'Dependency inputs changed; prepare another generation')
+    src = source_record(w, service, frozen=frozen)
+    b.require(r['image'] == runtime()['image'] and r['key'] == key(Path(src['path']), r['image']),
+              f'Dependency inputs changed; freeze sync, stop apps and run box.py deps --box {__import__("socket").gethostname()} --workspace {w} --service {service} --attempt <new-name> --apply, then select')
     obj = volume(r['volume'], r['labels'])
     b.require((b.safe(Path(obj['Mountpoint'])) / '.chart-installed').read_text() == r['key'], 'Incomplete dependency volume')
     return r
@@ -178,7 +186,9 @@ def npm_token():
 
 def install_deps(w, service, attempt):
     name(attempt)
-    src = source_record(w, service)
+    src = source_record(w, service, frozen=True)
+    if src['kind'] == 'mirror':
+        b.require(not any(c['State']['Running'] for c in containers()), 'Stop app writers before mirror dependency preparation')
     path = Path(src['path'])
     image = runtime()['image']
     k = key(path, image)
@@ -189,7 +199,11 @@ def install_deps(w, service, attempt):
             print(f'{service}: complete frozen dependencies reused ({r["key"][:12]}).')
             return
         except (RuntimeError, FileNotFoundError):
-            raise RuntimeError('Existing dependency receipt differs; use a new workspace for changed baseline')
+            if src['kind'] != 'mirror':
+                raise RuntimeError('Existing dependency receipt differs; use a new workspace for changed baseline')
+            old = b.read(record)
+            volume(old['volume'], old['labels'])
+            b.require(old['key'] != k or old['image'] != image, 'Dependency volume incomplete; inspect retained state')
     npmrc, token = npm_token()
     capacity()
     mount = json.loads(b.run(['findmnt', '-J', '-T', '/run', '-o', 'FSTYPE']))['filesystems'][0]
@@ -244,9 +258,13 @@ def install_deps(w, service, attempt):
             raise
         b.write(log, (result.stdout + result.stderr).replace(token, '[redacted]'))
     b.require(result.returncode == 0, f'Dependency install failed; inspect {log}; failed volume retained')
-    b.require(source_record(w, service)['fingerprint'] == src['fingerprint'] and key(path, image) == k, 'Source changed during install')
+    b.require(source_record(w, service, frozen=True)['fingerprint'] == src['fingerprint'] and key(path, image) == k, 'Source changed during install')
     b.write(modules / '.chart-installed', k, mode=0o444)
     record.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    if record.exists():
+        history = record.parent / 'history'
+        history.mkdir(mode=0o700, exist_ok=True)
+        b.save(history / (service + '-' + str(time.time_ns()) + '.json'), b.read(record))
     b.save(record, {'image': image, 'key': k, 'volume': vol, 'labels': labels, 'source': src['fingerprint'], 'log': str(log)})
     print(f'{service}: frozen Linux dependencies prepared; runtime selection unchanged.')
 
@@ -284,6 +302,8 @@ def spec(inv):
                         b.bind(STATE / service, '/run/chart', True)],
             'healthcheck': {'test': ['CMD', 'node', '-e', probe], 'interval': '5s', 'timeout': '4s', 'retries': 24, 'start_period': '30s'},
             'logging': {'driver': 'json-file', 'options': {'max-size': '10m', 'max-file': '3'}}}
+        if service in inv.get('sources', {}):
+            services[service]['labels']['chart-infra.source'] = inv['sources'][service]
     services['tharamine']['depends_on'] = {'auth': {'condition': 'service_healthy'}}
     services['orange']['depends_on'] = {s: {'condition': 'service_healthy'} for s in ('auth', 'tharamine')}
     return {'name': PROJECT, 'services': services, 'volumes': volumes,
@@ -295,6 +315,10 @@ def selection():
     b.require(inv['box'] == __import__('socket').gethostname() and inv['owner'] == OWNER, 'Wrong app selection')
     box_config.verify(STATE)
     for service in SERVICES:
+        src = source_record(inv['workspace'], service)
+        if src['kind'] == 'mirror':
+            b.require(inv.get('sources', {}).get(service) == src['registration'],
+                      'Mirror not activated; freeze sync and select while apps are stopped')
         b.require(inv['deps'][service] == dependency(inv['workspace'], service), 'Selected dependency generation differs')
     b.require(b.read(STATE / 'compose.json') == spec(inv), 'App Compose contract differs')
     return inv
@@ -303,8 +327,11 @@ def selection():
 def select(box, w):
     b.require(not any(c['State']['Running'] for c in containers()), 'Stop app writers before selection')
     box_config.verify(STATE)
-    deps = {s: dependency(w, s) for s in SERVICES}
+    deps = {s: dependency(w, s, frozen=True) for s in SERVICES}
     inv = {'owner': OWNER, 'box': box, 'workspace': w, 'image': runtime()['image'], 'deps': deps}
+    sources = {s: r['registration'] for s in SERVICES if (r := workspace(w)[s])['kind'] == 'mirror'}
+    if sources:
+        inv['sources'] = sources
     if (STATE / 'selection.json').exists():
         previous = b.read(STATE / 'selection.json')
         if previous == inv:
@@ -422,6 +449,9 @@ def main():
         else:
             print(json.dumps({'box': a.box, 'containers': [{'name': c['Name'], 'state': c['State']['Status'],
                   'health': c['State'].get('Health', {}).get('Status')} for c in containers()],
+                  'workspaces': {p.stem: {s: {'kind': r['kind'], 'revision': r.get('revision'),
+                                  'registration': r.get('registration')} for s, r in b.read(p).items()}
+                                 for p in (STATE / 'sources').glob('*.json')},
                   'storage': b.run(['df', '-h', '/', str(b.ROOT)])}, indent=2))
 
 

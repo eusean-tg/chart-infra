@@ -17,8 +17,7 @@ with its own root SSH identity and explicit `--box`. Image fetch, empty-dataset
 preparation and startup are separate commands. Start/stop/down retain HDD data
 and credentials; stop/down save the Dragonfly snapshot. Use `--expect-existing`
 after restarts to prove retention without recreating persistence tokens. Only one
-selected dataset is implemented; box-aware source sync and named
-dataset switching remain separate work. Never invoke these helpers on the PC as
+selected dataset is implemented; named-dataset switching remains separate work. Never invoke these helpers on the PC as
 a substitute for entering the box.
 
 For Incus backends, follow `incus/APPS.md` and `incus/box.py`. Prepare stock source
@@ -27,8 +26,13 @@ separately, then select while apps are stopped. Keep the box runtime on its
 internal-only network; installer registry access is separate. Stop app writers
 before backing lifecycle operations. `app_checks.py` creates retained synthetic
 roles/user/workspace and tests API login; its result is not Mac browser evidence.
-Box bundle workspaces do not implement Mutagen activation: never aim the k3s
-controller or laptop sessions at a selected bundle. Environment imports follow
+For box source sync, follow `incus/SOURCE-SYNC.md`. Use `box_sync.py` to retain
+the registered bundle and prepare its empty mirror, then `incus/laptop_sync.py`
+on the laptop for per-repo setup, resume and freeze. Stop selected app writers
+before handover, freeze mirrors before dependency preparation/selection and
+activate through `box.py`. Keep k3s helpers/state separate; never aim a raw
+session at a bundle. Read the named handoff for any explicitly retired sessions.
+Browser offline isolation is optional for Incus; backend runtime restrictions remain. Environment imports follow
 the agent-reviewed procedure in `incus/APPS.md`, with private retained backups.
 
 Read the checkout's `AGENTS.md` and `README.md`. Discover its location rather than assuming every developer uses `~/workspace`. With this skill inside the checkout, the repository root is two directories above the skill directory; an installed copy requires an explicit checkout path.
