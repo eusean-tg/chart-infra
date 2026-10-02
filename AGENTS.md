@@ -38,7 +38,9 @@ application assumptions into host/image gates or introduce an application box CL
   independent HDD backup/scratch restore and retain the SSD rootfs export and old
   stopped instance. Do not start two copies of one Tailscale identity.
 - Nightly HDD backup policy: 04:00 Asia/Kuala_Lumpur, seven days of completed nightly
-  copies, stopped copy and restoration of prior box running/stopped state. Manual
+  copies to `/var/backups/chart-incus` on NVMe, stopped copy and restoration of prior
+  box running/stopped state. Require explicit host enrollment; exclude managed-pilot,
+  image-test, builder and retained-rootfs instances from automatic stops. Manual
   backups, incomplete generations, rootfs exports and source/data are not pruned.
   Do not delete other retained material without explicit scoped authorization.
 

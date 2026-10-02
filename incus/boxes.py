@@ -38,8 +38,8 @@ def recreate(c, name, fingerprint, script_dir):
     export = backup.backup(c, name, rootfs=True, resume=False)
     record.update(backup=str(export), phase='backed-up'); h.save(private / 'recreate.json', record)
     # Validate the independent data archive before releasing the original attachment.
-    scratch = Path(c['hdd_mount']) / 'shared-dev/restore-checks' / (name + '-' + stamp)
-    record['restore_check'] = backup.restore(export, scratch)
+    scratch = backup.scratch_root() / (name + '-' + stamp)
+    record['restore_check'] = backup.restore(export, scratch, c)
     h.save(private / 'recreate.json', record)
     p.require(h.instance(c, name)['status'] == 'Stopped', 'Original box unexpectedly running')
     p.run(['incus', 'config', 'device', 'remove', 'local:' + name, 'data', '--project', c['project']])
@@ -58,6 +58,7 @@ def recreate(c, name, fingerprint, script_dir):
     record['phase'] = 'recreated'; h.save(private / 'recreate.json', record)
     print(json.dumps({'box': name, 'retained_rootfs': retired, 'backup': str(export),
                       'note': 'Reinstall projects/dependencies; reconcile paused laptop sessions explicitly.'}, indent=2))
+    return record
 
 
 def main():

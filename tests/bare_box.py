@@ -17,6 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'incus'))
 import image
 import host_common as h
 import backup
+import boxes
+STORAGE_CHECK = backup.storage
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'skills/chart-box/scripts'))
 import policy
 spec = importlib.util.spec_from_file_location('bare_sync', Path(__file__).resolve().parents[1] / 'skills/chart-box/scripts/sync.py')
@@ -27,6 +29,8 @@ class BareBox(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        home = patch.object(backup, 'BACKUP_HOME', self.root / 'ssd-backups'); home.start(); self.addCleanup(home.stop)
+        storage = patch.object(backup, 'storage', return_value=1024**3); storage.start(); self.addCleanup(storage.stop)
 
     def test_tracking_controls_private_names_not_contents(self):
         subprocess.run(['git', 'init', '-q', str(self.root)], check=True)
@@ -164,12 +168,11 @@ class BareBox(unittest.TestCase):
         calls = []
         def run(args):
             calls.append(args)
-            if args[0] == 'tar': raise RuntimeError('copy failed')
-            return ''
-        with patch.object(h, 'owned', return_value={'status': 'Running'}), patch.object(h, 'instance', return_value={'status': 'Stopped'}), patch.object(image.p, 'run', side_effect=run):
+            return '1\tfixture' if args[0] == 'du' else ''
+        with patch.object(h, 'owned', return_value={'status': 'Running'}), patch.object(h, 'instance', return_value={'status': 'Stopped'}), patch.object(image.p, 'run', side_effect=run), patch.object(backup, 'copy_command', side_effect=RuntimeError('copy failed')):
             with self.assertRaisesRegex(RuntimeError, 'copy failed'): backup.backup(c, 'test')
         self.assertEqual(calls[-1][:3], ['incus', 'start', 'local:test'])
-        receipt = next((self.root / 'shared-dev/backups/boxes').glob('*/test/backup.json'))
+        receipt = next(backup.backup_root(c).glob('*/test/backup.json'))
         self.assertFalse(json.loads(receipt.read_text())['complete'])
 
     def test_real_stopped_copy_and_scratch_restore(self):
@@ -214,14 +217,92 @@ class BareBox(unittest.TestCase):
             run.assert_called_once_with(None, 'sync', 'pause', 'owned')
 
     def test_nightly_excludes_managed_pilot_and_builder(self):
-        rows = [
-            {'name': 'managed-pilot', 'config': {'user.chart-infra': image.p.OWNER}, 'devices': {'data': {}}},
-            {'name': 'builder', 'config': {'user.chart-infra': image.p.OWNER}, 'devices': {}},
-            {'name': 'personal', 'config': {'user.chart-infra': image.p.OWNER, 'user.chart-box': h.OWNER}, 'devices': {'data': {}}},
-        ]
-        with patch.object(image.p, 'query', return_value=rows), patch.object(backup, 'backup', return_value='fixture-copy') as copy, patch.object(backup, 'prune'):
+        with patch.object(backup, 'enrollments', return_value=['personal']), patch.object(h, 'owned', return_value={'config': {'user.chart-box': h.OWNER}}), patch.object(backup, 'backup', return_value='fixture-copy') as copy, patch.object(backup, 'prune'):
             backup.scheduled({'project': 'test'})
             copy.assert_called_once_with({'project': 'test'}, 'personal', nightly=True)
+
+    def test_no_enrollment_means_no_automatic_stops(self):
+        with patch.object(image.p, 'STATE', self.root), patch.object(backup, 'backup') as copy, patch.object(backup, 'prune'):
+            backup.scheduled({'project': 'test'})
+            copy.assert_not_called()
+
+    def test_test_boxes_and_pilot_cannot_enroll(self):
+        for name in ('sean-dev-pilot', 'chart-test-example-a', 'chart-bare-example', 'retained-123'):
+            with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, 'cannot join'):
+                backup.enrollment({}, name)
+
+    def test_enroll_and_unenroll_do_not_mutate_box(self):
+        c = {'machine_id': 'm'}
+        with patch.object(image.p, 'STATE', self.root), patch.object(h, 'owned', return_value={'config': {'user.chart-box': h.OWNER}}), patch.object(image.p, 'run') as run:
+            backup.enrollment(c, 'alex-dev'); backup.enrollment(c, 'alex-dev')
+            self.assertEqual(backup.enrollments(c), ['alex-dev'])
+            backup.enrollment(c, 'alex-dev', remove=True)
+            self.assertEqual(backup.enrollments(c), [])
+            run.assert_not_called()
+
+    def test_destination_cannot_share_hdd_device(self):
+        with self.assertRaisesRegex(RuntimeError, 'separate from the HDD'):
+            STORAGE_CHECK({'hdd_mount': '/'}, self.root)
+
+    def test_capacity_preserves_quarter_of_ssd(self):
+        with patch.object(backup.p, 'no_symlinks'), patch.object(Path, 'exists', return_value=True), \
+             patch.object(Path, 'stat', autospec=True, side_effect=lambda path: SimpleNamespace(st_dev=2 if path == Path('/hdd') else 1)), \
+             patch.object(backup.shutil, 'disk_usage', return_value=SimpleNamespace(total=100 * 1024**3, free=26 * 1024**3)):
+            with self.assertRaisesRegex(RuntimeError, 'Insufficient SSD'):
+                STORAGE_CHECK({'hdd_mount': '/hdd'}, self.root)
+
+    def test_capacity_failure_does_not_stop_box(self):
+        with patch.object(h, 'owned', return_value={'status': 'Running'}), patch.object(backup, 'storage', side_effect=RuntimeError('Insufficient SSD')), patch.object(image.p, 'run') as run:
+            with self.assertRaisesRegex(RuntimeError, 'Insufficient SSD'):
+                backup.backup({}, 'test')
+            run.assert_not_called()
+
+    def test_copy_ceiling_retains_partial_archive(self):
+        target = self.root / 'partial'
+        with patch.object(backup, 'storage', return_value=1024):
+            with self.assertRaisesRegex(RuntimeError, 'partial archive retained'):
+                backup.copy_command({}, [sys.executable, '-c', 'import sys; f = open(sys.argv[1], "wb"); f.write(b"x" * 8192); f.flush()', target])
+        self.assertTrue(target.exists()); self.assertLessEqual(target.stat().st_size, 1024)
+
+    @contextlib.contextmanager
+    def recreation_fixture(self, *, restored=True, changed_identity=False):
+        hashes = iter(['original-ssh', 'changed-ssh' if changed_identity else 'original-ssh'])
+        def guest(c, name, args):
+            if args[0] == 'cat': return 'ssh-ed25519 fixture-key\n'
+            if args[0] == 'sha256sum': return next(hashes)
+            if args[0] == 'tailscale': return json.dumps({'Self': {'ID': 'same-node'}, 'BackendState': 'Running'})
+            raise AssertionError(args)
+        with patch.object(image.p, 'STATE', self.root), patch.object(h, 'owned', return_value={'status': 'Running'}), \
+             patch.object(h, 'guest', side_effect=guest), patch.object(backup, 'backup', return_value=self.root / 'archive') as copy, \
+             patch.object(backup, 'restore', side_effect=None if restored else RuntimeError('restore failed'), return_value={'scratch': str(backup.scratch_root() / 'fixture')}) as restore, \
+             patch.object(h, 'instance', return_value={'status': 'Stopped'}), patch.object(image.p, 'run') as run, \
+             patch.object(image, 'create') as create, contextlib.redirect_stdout(io.StringIO()):
+            yield copy, restore, run, create
+
+    def test_recreation_restore_failure_does_not_detach_original(self):
+        with self.recreation_fixture(restored=False) as (_, _, run, create):
+            with self.assertRaisesRegex(RuntimeError, 'restore failed'):
+                boxes.recreate({'project': 'p'}, 'test-box', 'fp', self.root)
+            run.assert_not_called(); create.assert_not_called()
+
+    def test_recreation_uses_ssd_scratch_and_preserves_node_identity(self):
+        c = {'project': 'p'}
+        with self.recreation_fixture() as (copy, restore, run, create):
+            record = boxes.recreate(c, 'test-box', 'fp', self.root)
+            copy.assert_called_once_with(c, 'test-box', rootfs=True, resume=False)
+            self.assertEqual(restore.call_args.args[1].parent, backup.scratch_root())
+            self.assertEqual(restore.call_args.args[2], c)
+            self.assertTrue(create.call_args.kwargs['adopt'])
+            self.assertEqual(record['phase'], 'recreated')
+            self.assertEqual(record['identity']['tailscale_id'], 'same-node')
+            self.assertEqual([call.args[0][1] for call in run.call_args_list], ['config', 'move'])
+
+    def test_recreation_identity_change_leaves_failure_receipt(self):
+        with self.recreation_fixture(changed_identity=True):
+            with self.assertRaisesRegex(RuntimeError, 'SSH identity differs'):
+                boxes.recreate({'project': 'p'}, 'test-box', 'fp', self.root)
+        record = json.loads(next((self.root / 'recreations').glob('*/recreate.json')).read_text())
+        self.assertEqual(record['phase'], 'original-retained')
 
     def test_refresh_recovers_after_old_session_termination(self):
         from types import SimpleNamespace

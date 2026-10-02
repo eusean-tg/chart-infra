@@ -148,7 +148,7 @@ recreation uses explicit backup, old-rootfs retention and HDD identity adoption.
 | nvm, node_modules, package caches, Docker data | SSD rootfs |
 | `/srv/chart/data` | Required retained per-box HDD attachment |
 | `/srv/chart/data/identity` | Retained SSH host keys and Tailscale state |
-| Host `shared-dev/backups/boxes/<stamp>/<box>` | Nightly HDD copies and explicit rootfs exports |
+| Host `/var/backups/chart-incus/boxes/<stamp>/<box>` on NVMe | Nightly HDD copies and explicit rootfs exports |
 
 APT upgrades remain explicit. Guest package timers are disabled. Incus preparation
 never recursively rewrites host HDD ownership. Check idmapped access and retained

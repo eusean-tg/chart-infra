@@ -40,7 +40,12 @@ two enrolled identity copies. Inspect a partial recreation's phase record before
 recovery; never initialize replacement data to bypass a failed mount/marker.
 
 Nightly HDD policy: 04:00 Asia/Kuala_Lumpur, seven days of completed nightly copies,
-brief box stop and restoration of prior box running/stopped state. Developers own
+stored under `/var/backups/chart-incus` on NVMe with the 25% reserve, brief box stop
+and restoration of prior box running/stopped state. Enroll each accepted personal
+box explicitly; managed-pilot, image-test, builder and retained instances cannot
+join automatic backups. Prove recovery with `tests/bare_recovery_live.py` on the
+verified build's test box before migration. Retire test instances and tailnet device
+registrations after acceptance; retain HDD data and evidence. Developers own
 app startup after boot. Manual backups, rootfs exports and incomplete generations
 are retained. No other pruning/deletion is authorized by routine setup.
 

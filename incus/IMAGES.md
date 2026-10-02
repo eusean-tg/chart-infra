@@ -96,7 +96,7 @@ Give the laptop agent the box name, SSH host-key fingerprint and developer guide
 Verify both operator/laptop `tailscale ping` and SSH; confirm intended teammate
 API access separately against tailnet ACLs. Host Incus access stays with operators.
 
-## Nightly HDD backups
+## Nightly HDD backups to NVMe
 
 Policy: **04:00 Asia/Kuala_Lumpur, seven days of completed nightly copies**. A backup
 stops one box gracefully, copies its HDD directory, then restores its prior box
@@ -105,12 +105,22 @@ developer's startup configuration; a process launched manually does not restart
 because the box does. Failed copies retain partial artifacts and attempt to restart
 an originally running box. Failure is visible in the systemd service journal.
 
-Backups live under `/mnt/hdd/shared-dev/backups/boxes/<UTC timestamp>/<box>/`.
-They protect against accidental changes/deletion. The source and backups share an
-HDD, so HDD failure needs an additional external/off-machine backup. SSD source,
+Backups live under `/var/backups/chart-incus/boxes/<UTC timestamp>/<box>/` on the
+host root NVMe filesystem, separate from the HDD source. An off-machine copy is
+needed for loss of the whole PC. SSD source,
 node_modules, `/root/.npmrc` and arbitrary files outside `/srv/chart/data` are not
 included in nightly copies. Place irreplaceable private config under HDD or export
-it separately. No application consistency hook is needed while the box is stopped.
+it separately. A stopped copy prevents concurrent guest writes; applications must
+still support recovery from their shutdown state. Developers can keep logical
+database dumps under `/srv/chart/data/backups/` for application-level restores.
+
+Destination checks require the host root filesystem and a device distinct from
+the HDD. Copies preserve 25% free space plus a 1 GiB margin. The data archive uses
+an apparent-size estimate; each archive writer receives a file-size ceiling based
+on available space. Scratch restore checks the uncompressed archive size. These
+checks do not reserve space against concurrent workstation writes. Capacity/copy
+failures retain incomplete artifacts; an ordinary backup restarts a box it stopped.
+Monitor both filesystem usage and retained manual exports/scratch directories.
 
 Prove a manual copy and restore on a test box before enabling the timer:
 
@@ -118,8 +128,10 @@ Prove a manual copy and restore on a test box before enabling the timer:
 sudo python3 incus/backup.py backup --config "$CHART_HOST_CONFIG" \
   --box <test-box> --apply
 sudo python3 incus/backup.py restore-check --config "$CHART_HOST_CONFIG" \
-  --backup /mnt/hdd/shared-dev/backups/boxes/<stamp>/<test-box> \
-  --scratch /mnt/hdd/shared-dev/restore-checks/<unique-name> --apply
+  --backup /var/backups/chart-incus/boxes/<stamp>/<test-box> \
+  --scratch /var/backups/chart-incus/restore-checks/<unique-name> --apply
+sudo python3 incus/backup.py enroll --config "$CHART_HOST_CONFIG" \
+  --box <accepted-personal-box> --apply
 sudo python3 incus/backup.py install-timer --config "$CHART_HOST_CONFIG" --apply
 ```
 
@@ -131,14 +143,43 @@ a full ACL/xattr round trip. Inspect filesystem-specific restore needs before li
 recovery. An archive with an external symlink is retained but needs a separately
 reviewed restore method; automatic scratch extraction refuses it.
 
-The timer operates only on registered personal boxes (`user.chart-box=chart-bare-v1`)
-with their expected HDD devices and markers. The retained managed pilot is excluded
-from automatic stops until explicit migration; a manual backup can target it. It runs from a root-owned tool snapshot, not a developer-writable checkout.
+The timer operates only on explicitly enrolled personal boxes with their expected
+HDD devices, markers and `user.chart-box=chart-bare-v1`. Enrollment lives in
+`/var/lib/chart-incus/backup-enrollment.json`. No box is enrolled by creation.
+`sean-dev-pilot`, `chart-test-*`, `chart-bare-*` and `retained-*` cannot enroll;
+manual backup remains available. `unenroll --box <name> --apply` removes a box
+from the schedule without stopping it or removing copies. Installation requires
+at least one enrolled box. The timer runs from a root-owned tool snapshot.
 Missed schedules do not trigger daytime catch-up (`Persistent=false`). Pruning
 covers only completed nightly HDD-only generations older than seven days with a
-newer completed copy. Manual backups, rootfs exports and incomplete generations
+newer completed copy. Copies in the former HDD backup directory remain untouched.
+Manual backups, rootfs exports and incomplete generations
 are retained. A failed nightly run skips pruning. Monitor HDD/SSD space and inspect
 `systemctl status chart-box-backup.timer` and `journalctl -u chart-box-backup.service`.
+
+## Test recovery before migration
+
+An opt-in host fixture reuses test box A from a verified image build:
+
+```sh
+python3 tests/bare_recovery_live.py --config "$CHART_HOST_CONFIG" --build "$CHART_BUILD"
+sudo python3 tests/bare_recovery_live.py --config "$CHART_HOST_CONFIG" \
+  --build "$CHART_BUILD" --apply
+```
+
+It creates unique synthetic root/UID-1000 files on that box's HDD, runs recreation
+with NVMe backup/rootfs export/scratch restore, and checks file hashes, guest
+ownership/modes, SSH identity and Tailscale node identity. It enrolls no additional
+Tailscale device. Evidence is `/var/lib/chart-incus/recovery-proofs/<build>/proof.json`.
+The previous rootfs remains stopped without its HDD attachment. A partial proof
+requires inspection of that receipt and the recreation phase; do not rerun blindly.
+
+After acceptance and before handing a box to a developer, retire disposable image
+test instances and remove their corresponding Tailscale device registrations using
+an authorized account. Stopping a box alone does not remove its registration.
+Preserve HDD directories, archives and evidence unless their deletion is explicitly
+authorized. Keep the working managed pilot until its replacement's application,
+sync and data acceptance pass. No cleanup is performed by this fixture.
 
 ## Recreate while retaining identity and data
 
