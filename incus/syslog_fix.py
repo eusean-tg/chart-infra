@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
-"""Mitigate blocking rsyslog activation after a synthetic fixture rollout check."""
-import argparse
+"""Image-builder mitigation for blocking rsyslog socket activation."""
 import json
 import os
 from pathlib import Path
 import select
 import signal
-import sys
 import time
 import prep as p
 import host_common as h
-import storage_trial as t
 
 DROPIN = '/etc/systemd/system/rsyslog.service.d/chart-nonblocking.conf'
 CONTENT = '[Service]\nNonBlocking=yes\n'
@@ -139,60 +136,3 @@ def mitigate(c, name, validate, receipt, durable=False):
         record.update(failed_step=record['phase'], phase='failed', error=str(error))
         h.save(receipt, record)
         raise
-
-
-def execute(c, trial, box):
-    h.host(c)
-    obj = h.owned(c, box)
-    p.require(obj['config'].get('user.chart-box') == h.OWNER and obj['status'] == 'Running',
-              'Select a running registered personal box')
-    directory = p.STATE / 'syslog-rollouts' / box
-    p.no_symlinks(directory)
-    p.require(not directory.exists(), 'Rollout receipt exists; inspect before retry')
-    trial_dir = p.STATE / 'storage-trials' / trial
-    p.no_symlinks(trial_dir)
-    original = json.loads((trial_dir / 'proof.json').read_text())
-    prior = json.loads((trial_dir / 'syslog-experiment-stdin-fixed.json').read_text())
-    name = t.trial_names(trial)[1]
-    p.require(original['owner'] == t.OWNER and original['host'] == c['machine_id']
-              and original['trial'] == trial and original['pool'] == t.POOL, 'Trial identity differs')
-    p.require(prior['instance'] == name and prior['owner'] == t.OWNER
-              and prior['image'] == original['image']
-              and prior['phase'] == 'experiment-passed-fixture-retained', 'Verified mitigation fixture required')
-    spec = t.fixture_spec(c, name, t.POOL, original['image'], trial)
-    check_fixture = lambda: t.validate_fixture(c, name, spec)
-    p.require(check_fixture()['status'] == 'Stopped', 'Fixture must begin stopped')
-    t.validate_pool(c, p.query('/1.0/storage-pools/' + t.POOL))
-    h.candidate(c, original['image'], verified=True)
-    h.save(directory / 'plan.json', {'box': box, 'fixture': name, 'trial': trial})
-    print('Verifying host-signal rsyslog restart on ' + name, flush=True)
-    p.run(['incus', 'start', 'local:' + name, '--project', c['project']], input='')
-    h.wait_ready(c, name)
-    mitigate(c, name, check_fixture, directory / 'fixture.json')
-    check_fixture()
-    p.run(['incus', 'stop', 'local:' + name, '--project', c['project'], '--timeout', '120'], input='')
-    p.require(check_fixture()['status'] == 'Stopped', 'Fixture shutdown failed; live box unchanged')
-    print('Applying rsyslog mitigation to ' + box + ' without stopping the box', flush=True)
-    result = mitigate(c, box, lambda: h.owned(c, box), directory / 'box.json', durable=True)
-    print(json.dumps({'box': box, 'result': result, 'evidence': str(directory),
-                      'scope': 'rsyslog configuration/process only; box and application services not restarted'}, indent=2))
-
-
-def main():
-    os.umask(0o077)
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config', required=True); parser.add_argument('--trial', required=True)
-    parser.add_argument('--box', required=True); parser.add_argument('--apply', action='store_true')
-    a = parser.parse_args(); c = p.config(a.config); p.check_host(c)
-    p.box_name(a.box); name = t.trial_names(a.trial)[1]
-    print(json.dumps({'fixture_first': name, 'personal_box': a.box,
-                      'change': 'NonBlocking=yes; host TERM to exact rsyslog pidfd, then service start',
-                      'no_force_kill': True, 'apply': a.apply}, indent=2), flush=True)
-    if a.apply:
-        with p.locked(): execute(c, a.trial, a.box)
-
-
-if __name__ == '__main__':
-    try: main()
-    except (RuntimeError, OSError, ValueError, KeyError) as error:
-        print('Refused:', error, file=sys.stderr); sys.exit(1)

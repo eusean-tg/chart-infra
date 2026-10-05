@@ -17,7 +17,7 @@ Host administration belongs to the operator.
 | --- | --- |
 | Understand the whole setup: instances, networking, storage, volumes and backups | [Architecture and storage map](incus/ARCHITECTURE.md) |
 | Prepare the Ubuntu 26.04 host, networking and storage | [Incus preparation](incus/README.md) |
-| Test HDD-backed box storage before migration | [Storage trial](incus/STORAGE.md) |
+| Inspect root-pool placement and backup coverage | [Storage placement](incus/STORAGE.md) |
 | Build and accept an image, create/recreate boxes, schedule backups | [Image and lifecycle](incus/IMAGES.md) |
 | Set up projects, private configuration and databases | [Developer-agent guide](incus/DEVELOPER.md) |
 | Sync source, run remote tests and inspect applications | [Chart-box skill](skills/chart-box/SKILL.md) |
@@ -42,9 +42,6 @@ These standard-library checks use local fixtures without deploying workloads:
 python3 tests/incus_prep.py
 python3 tests/bare_box.py
 python3 tests/bare_boundary.py
-python3 tests/storage_trial.py
-python3 tests/storage_move.py
-python3 tests/storage_migrate.py
 python3 tests/syslog.py
 bash -n incus/bare-base.sh incus/bare-identity.sh incus/guest-firewall.sh
 ```

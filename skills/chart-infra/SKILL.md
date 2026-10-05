@@ -27,8 +27,8 @@ Use `skills/chart-box/SKILL.md` and `incus/DEVELOPER.md` for laptop agents. Disc
 paths and use their recorded box mapping. Do not operate laptop sessions from host
 assumptions or run application fixtures as bare-box acceptance.
 
-Follow registered root-pool placement for source/dependencies and incus/STORAGE.md
-for pool migration. Keep the required verified HDD data attachment, isolated UID
+Follow registered root-pool placement for source/dependencies; incus/STORAGE.md
+defines placement and backup coverage. Keep the required verified HDD data attachment, isolated UID
 maps, host firewall, inotify settings and host-matched timezone. No CPU/memory
 limits or reservations. The LAN UDP exception supports Tailscale transport;
 tailnet ACLs govern overlay peer access. Separate IPs alone do not enforce ACLs.

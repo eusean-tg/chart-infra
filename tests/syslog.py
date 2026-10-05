@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-"""Offline target mapping and failure guards for syslog rollout."""
-import contextlib
+"""Offline target mapping and failure guards for image-builder syslog mitigation."""
 import importlib.util
-import io
 import json
 import os
 from pathlib import Path
@@ -77,35 +75,7 @@ class Syslog(unittest.TestCase):
             self.assertNotIn(['systemctl', 'start', 'rsyslog'], commands)
             self.assertEqual(json.loads(receipt.read_text())['failed_step'], 'terminate-rsyslog')
 
-    def test_failed_fixture_prevents_live_box_mutation(self):
-        with tempfile.TemporaryDirectory() as d, contextlib.ExitStack() as stack:
-            root = Path(d); c = {'machine_id': 'host', 'project': 'p'}
-            name = s.t.trial_names('trial1')[1]
-            s.h.save(root / 'storage-trials/trial1/proof.json',
-                     dict(owner=s.t.OWNER, host='host', trial='trial1', pool='hdd', image='f' * 64))
-            s.h.save(root / 'storage-trials/trial1/syslog-experiment-stdin-fixed.json',
-                     dict(owner=s.t.OWNER, instance=name, image='f' * 64, phase='experiment-passed-fixture-retained'))
-            for obj, method in ((s.h, 'host'), (s.h, 'candidate'), (s.h, 'wait_ready'),
-                                (s.t, 'validate_pool'), (s.t, 'fixture_spec'), (s.p, 'query'), (s.p, 'run')):
-                stack.enter_context(patch.object(obj, method))
-            stack.enter_context(patch.object(s.p, 'STATE', root))
-            stack.enter_context(patch.object(s.h, 'owned', return_value={
-                'config': {'user.chart-box': s.h.OWNER}, 'status': 'Running'}))
-            stack.enter_context(patch.object(s.t, 'validate_fixture', return_value={'status': 'Stopped'}))
-            mitigate = stack.enter_context(patch.object(s, 'mitigate', side_effect=RuntimeError('fixture failed')))
-            with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(RuntimeError, 'fixture failed'):
-                s.execute(c, 'trial1', 'developer')
-            self.assertEqual(mitigate.call_count, 1)
-            self.assertEqual(mitigate.call_args.args[1], name)
-
     def test_guest_scripts_compile(self):
         compile(s.PROBE, '<probe>', 'exec'); compile(s.INSTALL, '<install>', 'exec')
-
-    def test_plan_does_not_execute(self):
-        with patch.object(sys, 'argv', ['syslog.py', '--config', 'fixture', '--trial', 'trial1', '--box', 'developer']), \
-             patch.object(s.p, 'config', return_value={}), patch.object(s.p, 'check_host'), \
-             patch.object(s, 'execute') as execute, contextlib.redirect_stdout(io.StringIO()):
-            s.main(); execute.assert_not_called()
-
 
 if __name__ == '__main__': unittest.main()

@@ -29,7 +29,7 @@ application assumptions into host/image gates or introduce an application box CL
   remains unprivileged on the host. Preserve host firewall, HDD identity checks,
   isolated UID maps and required attachments. Tailnet ACLs govern overlay access.
 - Follow registered root-pool placement for source/dependencies; keep retained data
-  on the required HDD /srv/chart/data attachment. Storage moves follow incus/STORAGE.md.
+  on the required HDD /srv/chart/data attachment. Storage placement and coverage are in incus/STORAGE.md.
   Monitor capacity; configure no CPU/memory caps or reservations. Preserve
   host-matched timezone, inotify tuning and the Tailscale LAN UDP allowance.
 - Before recreation, coordinate paused laptop sessions, stop the box, verify an

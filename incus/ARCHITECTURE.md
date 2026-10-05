@@ -96,7 +96,7 @@ Host configuration selects the default `pool`; optional `instance_pools` entries
 select `hdd` for individual names. The preparation template retains a 200 GiB
 SSD btrfs default. HDD placement must be explicitly registered; creating an HDD
 pool alone does not change future box placement. Inspect actual root devices.
-[Storage placement procedures](STORAGE.md) cover the HDD pool and cutover.
+[Storage placement](STORAGE.md) defines pool registration and backup coverage.
 
 Pool capacity is shared, not a per-box allocation. The SSD sparse file consumes
 host blocks as data is written. The HDD directory pool shares the HDD filesystem
