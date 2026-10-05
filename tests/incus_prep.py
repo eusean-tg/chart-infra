@@ -63,35 +63,35 @@ class Guards(unittest.TestCase):
                 prep.write_owned(p, "replacement")
             self.assertEqual(p.read_text(), "original")
 
-    def test_foreign_incus_resource_rejected(self):
-        with patch.object(prep, "query", return_value=[{"name": "ssd", "config": {}}]) as query:
-            with self.assertRaises(RuntimeError):
-                prep.resource("storage-pools", "ssd", {"config": {"user.chart-infra": prep.OWNER}})
-            self.assertEqual(query.call_count, 1)
-
-    def test_conflicting_owned_resource_rejected(self):
-        value = {"name": "ssd", "driver": "dir", "config": {"user.chart-infra": prep.OWNER}}
-        with patch.object(prep, "query", return_value=[value]) as query:
-            with self.assertRaises(RuntimeError):
-                prep.resource("storage-pools", "ssd", {"driver": "btrfs", "config": value["config"]})
-            self.assertEqual(query.call_count, 1)
-
-    def test_owned_resource_rerun_is_read_only(self):
-        value = {"name": "ssd", "driver": "btrfs", "config": {"user.chart-infra": prep.OWNER}}
-        with patch.object(prep, "query", return_value=[value]) as query:
-            prep.resource("storage-pools", "ssd", {"driver": "btrfs", "config": value["config"]})
-            self.assertEqual(query.call_count, 1)
-
-    def test_new_resource_created_with_explicit_owner(self):
-        with patch.object(prep, "query", side_effect=[[], None]) as query:
-            prep.resource("projects", "chart-dev", {"config": {"user.chart-infra": prep.OWNER}})
-            self.assertEqual(query.call_args.args[2], "POST")
-            self.assertEqual(query.call_args.args[1]["config"]["user.chart-infra"], prep.OWNER)
+    def test_resource_creation_and_existing_ownership(self):
+        desired = {"driver": "btrfs", "config": {"user.chart-infra": prep.OWNER}}
+        owned = {"name": "ssd", **desired}
+        cases = [
+            ("absent", [], None),
+            ("owned", [owned], None),
+            ("foreign", [{**owned, "config": {}}], "Refusing foreign"),
+            ("conflicting", [{**owned, "driver": "dir"}], "Conflicting"),
+        ]
+        for label, existing, error in cases:
+            with self.subTest(case=label), patch.object(prep, "query", side_effect=[existing, None]) as query, \
+                 patch.object(prep.Path, "exists", return_value=False):
+                if error:
+                    with self.assertRaisesRegex(RuntimeError, error):
+                        prep.resource("storage-pools", "ssd", desired)
+                else:
+                    prep.resource("storage-pools", "ssd", desired)
+                if label == "absent":
+                    self.assertEqual(query.call_count, 2)
+                    self.assertEqual(query.call_args.args,
+                                     ("/1.0/storage-pools", {"name": "ssd", **desired}, "POST"))
+                else:
+                    self.assertEqual(query.call_count, 1)
 
     def test_orphan_pool_file_cannot_be_formatted(self):
         with patch.object(prep, "query", return_value=[]) as query, \
-             patch.object(prep.Path, "exists", return_value=True):
-            with self.assertRaises(RuntimeError):
+             patch.object(prep.Path, "exists", autospec=True,
+                          side_effect=lambda path: path == Path("/var/lib/incus/disks/ssd.img")):
+            with self.assertRaisesRegex(RuntimeError, "Unregistered pool backing file"):
                 prep.resource("storage-pools", "ssd", {"driver": "btrfs", "config": {"user.chart-infra": prep.OWNER}})
             self.assertEqual(query.call_count, 1)
 

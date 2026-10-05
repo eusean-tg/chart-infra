@@ -348,23 +348,27 @@ class BareBox(unittest.TestCase):
             backup.scheduled({'project': 'test'})
             copy.assert_not_called()
 
-    def test_reserved_instance_names_cannot_enroll(self):
-        for name in ('chart-test-example-a', 'chart-bare-example', 'retained-123'):
-            with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, 'cannot join'):
-                backup.enrollment({}, name)
-
-    def test_unmarked_box_cannot_enroll_under_any_personal_name(self):
-        with patch.object(image.p, 'STATE', self.root), patch.object(h, 'owned', return_value={'config': {}}):
-            for name in ('alex-dev', 'sean-dev-pilot'):
-                with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, 'Only personal boxes'):
+    def test_enrollment_depends_on_reserved_prefixes_and_personal_marker(self):
+        cases = [
+            ('chart-test-example-a', True, 'cannot join'),
+            ('chart-bare-example', True, 'cannot join'),
+            ('retained-123', True, 'cannot join'),
+            ('alex-dev', False, 'Only personal boxes'),
+            ('sean-dev-pilot', False, 'Only personal boxes'),
+            ('sean-dev-pilot', True, None),
+        ]
+        for index, (name, marked, error) in enumerate(cases):
+            state = self.root / str(index)
+            config = {'user.chart-box': h.OWNER} if marked else {}
+            with self.subTest(name=name, marked=marked), patch.object(image.p, 'STATE', state), \
+                 patch.object(h, 'owned', return_value={'config': config}):
+                if error:
+                    with self.assertRaisesRegex(RuntimeError, error):
+                        backup.enrollment({'machine_id': 'm'}, name)
+                    self.assertFalse((state / 'backup-enrollment.json').exists())
+                else:
                     backup.enrollment({'machine_id': 'm'}, name)
-            self.assertFalse((self.root / 'backup-enrollment.json').exists())
-
-    def test_old_pilot_name_can_be_used_by_a_registered_personal_box(self):
-        c = {'machine_id': 'm'}
-        with patch.object(image.p, 'STATE', self.root), patch.object(h, 'owned', return_value={'config': {'user.chart-box': h.OWNER}}):
-            backup.enrollment(c, 'sean-dev-pilot')
-            self.assertEqual(backup.enrollments(c), ['sean-dev-pilot'])
+                    self.assertEqual(backup.enrollments({'machine_id': 'm'}), [name])
 
     def test_nightly_validates_all_markers_before_stopping_any_box(self):
         with patch.object(backup, 'enrollments', return_value=['personal', 'unmarked']), \
@@ -384,8 +388,15 @@ class BareBox(unittest.TestCase):
             run.assert_not_called()
 
     def test_destination_cannot_share_hdd_device(self):
-        with self.assertRaisesRegex(RuntimeError, 'separate from the HDD'):
-            STORAGE_CHECK({'hdd_mount': '/'}, self.root)
+        real_stat = Path.stat
+        def same_device(path, *args, **kwargs):
+            fields = list(real_stat(path, *args, **kwargs))
+            fields[2] = 123
+            return os.stat_result(fields)
+        with patch.object(Path, 'stat', autospec=True, side_effect=same_device), \
+             patch.object(backup.shutil, 'disk_usage', return_value=SimpleNamespace(total=100 * 1024**3, free=90 * 1024**3)):
+            with self.assertRaisesRegex(RuntimeError, 'separate from the HDD'):
+                STORAGE_CHECK({'hdd_mount': '/'}, self.root)
 
     def test_capacity_preserves_quarter_of_ssd(self):
         with patch.object(backup.p, 'no_symlinks'), patch.object(Path, 'exists', return_value=True), \
