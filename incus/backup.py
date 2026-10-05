@@ -67,8 +67,8 @@ def enrollments(c):
 
 def eligible(name):
     p.box_name(name)
-    p.require(name != 'sean-dev-pilot' and not name.startswith(('chart-test-', 'chart-bare-', 'retained-')),
-              'Managed pilot, image fixtures and retained instances cannot join nightly backups')
+    p.require(not name.startswith(('chart-test-', 'chart-bare-', 'retained-')),
+              'Image fixtures and retained instances cannot join nightly backups')
 
 
 def enrollment(c, name, remove=False):

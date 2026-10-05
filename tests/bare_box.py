@@ -263,7 +263,7 @@ class BareBox(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'session paused'): sync.check_policy(None, cfg, 'repo')
             run.assert_called_once_with(None, 'sync', 'pause', 'owned')
 
-    def test_nightly_excludes_managed_pilot_and_builder(self):
+    def test_nightly_backs_up_enrolled_personal_box(self):
         with patch.object(backup, 'enrollments', return_value=['personal']), patch.object(h, 'owned', return_value={'config': {'user.chart-box': h.OWNER}}), patch.object(backup, 'backup', return_value='fixture-copy') as copy, patch.object(backup, 'prune'):
             backup.scheduled({'project': 'test'})
             copy.assert_called_once_with({'project': 'test'}, 'personal', nightly=True)
@@ -273,10 +273,31 @@ class BareBox(unittest.TestCase):
             backup.scheduled({'project': 'test'})
             copy.assert_not_called()
 
-    def test_test_boxes_and_pilot_cannot_enroll(self):
-        for name in ('sean-dev-pilot', 'chart-test-example-a', 'chart-bare-example', 'retained-123'):
+    def test_reserved_instance_names_cannot_enroll(self):
+        for name in ('chart-test-example-a', 'chart-bare-example', 'retained-123'):
             with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, 'cannot join'):
                 backup.enrollment({}, name)
+
+    def test_unmarked_box_cannot_enroll_under_any_personal_name(self):
+        with patch.object(image.p, 'STATE', self.root), patch.object(h, 'owned', return_value={'config': {}}):
+            for name in ('alex-dev', 'sean-dev-pilot'):
+                with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, 'Only personal boxes'):
+                    backup.enrollment({'machine_id': 'm'}, name)
+            self.assertFalse((self.root / 'backup-enrollment.json').exists())
+
+    def test_old_pilot_name_can_be_used_by_a_registered_personal_box(self):
+        c = {'machine_id': 'm'}
+        with patch.object(image.p, 'STATE', self.root), patch.object(h, 'owned', return_value={'config': {'user.chart-box': h.OWNER}}):
+            backup.enrollment(c, 'sean-dev-pilot')
+            self.assertEqual(backup.enrollments(c), ['sean-dev-pilot'])
+
+    def test_nightly_validates_all_markers_before_stopping_any_box(self):
+        with patch.object(backup, 'enrollments', return_value=['personal', 'unmarked']), \
+             patch.object(h, 'owned', side_effect=[{'config': {'user.chart-box': h.OWNER}}, {'config': {}}]), \
+             patch.object(backup, 'backup') as copy, patch.object(backup, 'prune') as prune:
+            with self.assertRaisesRegex(RuntimeError, 'ownership differs'):
+                backup.scheduled({'project': 'test'})
+            copy.assert_not_called(); prune.assert_not_called()
 
     def test_enroll_and_unenroll_do_not_mutate_box(self):
         c = {'machine_id': 'm'}
