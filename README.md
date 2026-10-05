@@ -14,6 +14,7 @@ Host administration belongs to the operator.
 
 | Task | Guide |
 | --- | --- |
+| Understand the whole setup: instances, networking, storage, volumes and backups | [Architecture and storage map](incus/ARCHITECTURE.md) |
 | Prepare the Ubuntu 26.04 host, networking and storage | [Incus preparation](incus/README.md) |
 | Build and accept an image, create/recreate boxes, schedule backups | [Image and lifecycle](incus/IMAGES.md) |
 | Set up projects, private configuration and databases | [Developer-agent guide](incus/DEVELOPER.md) |
