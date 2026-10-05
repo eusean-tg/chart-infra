@@ -94,5 +94,54 @@ class StorageTrial(unittest.TestCase):
             t.main(); execute.assert_not_called()
             self.assertFalse(json.loads(out.getvalue())['apply'])
 
+    def test_original_failure_survives_cleanup_failure(self):
+        record = {'phase': 'docker-build-run', 'results': {'hdd': {'files': 4096}}}
+        original = RuntimeError('Docker build failed')
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(t, 'validate_fixture', return_value={'status': 'Running'}), \
+             patch.object(t.p, 'run', side_effect=RuntimeError('Shutdown timed out')) as run:
+            with self.assertRaises(RuntimeError) as caught:
+                with t.retain_failure(self.c, 'fixture', {}, Path(directory), record):
+                    raise original
+            self.assertIs(caught.exception, original)
+            saved = json.loads((Path(directory) / 'proof.json').read_text())
+            self.assertEqual(saved['failed_step'], 'docker-build-run')
+            self.assertIn('Docker build failed', saved['error'])
+            self.assertIn('Shutdown timed out', saved['cleanup_error'])
+            self.assertEqual(saved['results']['hdd']['files'], 4096)
+            run.assert_called_once()
+
+    def test_failed_stop_is_not_retried(self):
+        for phase in ('stopping-for-restart', 'stopping-for-removal'):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory, \
+                 patch.object(t, 'validate_fixture', return_value={'status': 'Running'}), \
+                 patch.object(t.p, 'run') as run:
+                record = {'phase': phase}
+                with self.assertRaisesRegex(RuntimeError, 'timed out'):
+                    with t.retain_failure(self.c, 'fixture', {}, Path(directory), record):
+                        raise RuntimeError('Shutdown timed out')
+                run.assert_not_called()
+                self.assertEqual(record['failed_step'], phase)
+
+    def test_foreign_fixture_is_retained_without_stop(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(t, 'validate_fixture', side_effect=RuntimeError('Ownership differs')), \
+             patch.object(t.p, 'run') as run:
+            record = {'phase': 'docker-build-run'}
+            with self.assertRaisesRegex(RuntimeError, 'Original failure'):
+                with t.retain_failure(self.c, 'fixture', {}, Path(directory), record):
+                    raise RuntimeError('Original failure')
+            run.assert_not_called()
+            self.assertIn('Ownership differs', record['cleanup_error'])
+
+    def test_checkpoint_persists_partial_measurements(self):
+        with tempfile.TemporaryDirectory() as directory:
+            record = {'results': {'hdd': {'write_and_fsync_seconds': 2}}}
+            t.checkpoint(Path(directory), record, 'fixture', 'docker-build-run')
+            saved = json.loads((Path(directory) / 'proof.json').read_text())
+            self.assertEqual(saved['phase'], 'docker-build-run')
+            self.assertEqual(saved['instance'], 'fixture')
+            self.assertEqual(saved['results'], record['results'])
+
 
 if __name__ == '__main__': unittest.main()

@@ -59,6 +59,11 @@ failure. Inspect the phase and actual Incus state before manual recovery; an
 existing receipt refuses a blind rerun. Use a new trial ID only after accounting
 for retained resources.
 
+A failed graceful stop can leave the fixture running. The script does not repeat
+a failed stop or force it off. The receipt saves partial file measurements before
+Docker checks, identifies the failed step, and records cleanup errors separately
+from the original failure. A partial measurement is not a passed trial.
+
 Timings are synthetic and affected by filesystem caches and other host workloads.
 They establish neither cold dependency-install performance nor application hot
 reload latency. Application startup, source sync and representative dependency

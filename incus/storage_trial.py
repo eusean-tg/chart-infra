@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compare synthetic nested-Docker/storage behavior before an HDD pool migration."""
 import argparse
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -96,6 +97,36 @@ docker run --name chart-storage-fixture --network=none chart-storage-fixture
 '''
 
 
+def checkpoint(receipt, record, name, step):
+    record.update(phase=step, instance=name)
+    h.save(receipt / 'proof.json', record)
+
+
+@contextmanager
+def retain_failure(c, name, spec, receipt, record):
+    try:
+        yield
+    except (Exception, KeyboardInterrupt) as error:
+        failed_step = record['phase']
+        record.update(phase='failed', failed_step=failed_step,
+                      error=f'{type(error).__name__}: {error}')
+        h.save(receipt / 'proof.json', record)
+        try:
+            obj = validate_fixture(c, name, spec)
+            if obj['status'] == 'Running':
+                if failed_step in ('stopping-for-restart', 'stopping-for-removal'):
+                    record['cleanup'] = 'Shutdown failed; retained without a second stop attempt'
+                else:
+                    p.run(['incus', 'stop', 'local:' + name, '--project', c['project'], '--timeout', '120'])
+                    record['cleanup'] = 'Graceful stop returned; fixture retained'
+            else:
+                record['cleanup'] = 'Fixture retained; observed status: ' + obj['status']
+        except (Exception, KeyboardInterrupt) as cleanup_error:
+            record['cleanup_error'] = f'{type(cleanup_error).__name__}: {cleanup_error}'
+        h.save(receipt / 'proof.json', record)
+        raise
+
+
 def execute(c, trial, fingerprint):
     h.host(c)
     h.candidate(c, fingerprint, verified=True)
@@ -126,20 +157,28 @@ def execute(c, trial, fingerprint):
         spec = fixture_spec(c, name, pool, fingerprint, trial)
         record['phase'] = 'creating-' + name; h.save(receipt / 'proof.json', record)
         p.query('/1.0/instances?project=' + c['project'], spec, 'POST')
-        try:
+        with retain_failure(c, name, spec, receipt, record):
             validate_fixture(c, name, spec)
+            checkpoint(receipt, record, name, 'booting')
             start = time.monotonic()
             p.run(['incus', 'start', 'local:' + name, '--project', c['project']])
             h.wait_ready(c, name)
             boot = time.monotonic() - start
             # The bare image has SSH and Tailscale masked; no credentials or enrollment are supplied.
             p.require(not h.guest(c, name, ['sh', '-c', 'find /srv/chart/source -mindepth 1 -print -quit']).strip(), 'Image has source content')
+            checkpoint(receipt, record, name, 'measuring-files')
             result = json.loads(h.guest(c, name, ['python3', '-c', BENCH]))
             result['boot_seconds'] = boot
+            record['results'][pool] = result
+            checkpoint(receipt, record, name, 'docker-build-run')
             h.guest(c, name, ['timeout', '180', 'bash', '-c', SMOKE])
+            result['docker'] = 'build/run passed; restart unverified'
+            checkpoint(receipt, record, name, 'stopping-for-restart')
             p.run(['incus', 'stop', 'local:' + name, '--project', c['project'], '--timeout', '120'])
+            checkpoint(receipt, record, name, 'restarting')
             p.run(['incus', 'start', 'local:' + name, '--project', c['project']])
             h.wait_ready(c, name)
+            checkpoint(receipt, record, name, 'verifying-retention')
             retained = json.loads(h.guest(c, name, ['cat', '/root/chart-storage-fixture/result.json']))
             p.require(retained['sha256'] == result['sha256'], 'Fixture receipt changed across restart')
             actual = h.guest(c, name, ['python3', '-c', "import hashlib,pathlib; h=hashlib.sha256(); [h.update(p.read_bytes()) for p in sorted(pathlib.Path('/root/chart-storage-fixture').glob('*/*'))]; print(h.hexdigest())"]).strip()
@@ -148,13 +187,14 @@ def execute(c, trial, fingerprint):
             result.update(docker='build/run/restart passed', file_retention='passed')
             record['results'][pool] = result
             record['phase'] = 'verified-' + name; h.save(receipt / 'proof.json', record)
-        finally:
+            checkpoint(receipt, record, name, 'stopping-for-removal')
             obj = validate_fixture(c, name, spec)
             if obj['status'] == 'Running':
                 p.run(['incus', 'stop', 'local:' + name, '--project', c['project'], '--timeout', '120'])
-        # Only successful synthetic instances created by this run are removed.
-        p.require(validate_fixture(c, name, spec)['status'] == 'Stopped', 'Trial did not stop')
-        p.run(['incus', 'delete', 'local:' + name, '--project', c['project']])
+            # Only successful synthetic instances created by this run are removed.
+            p.require(validate_fixture(c, name, spec)['status'] == 'Stopped', 'Trial did not stop')
+            checkpoint(receipt, record, name, 'removing-successful-fixture')
+            p.run(['incus', 'delete', 'local:' + name, '--project', c['project']])
     record.update(phase='verified', scope='synthetic cached-file scan, file writes, Docker build/run and restart; not application performance')
     h.save(receipt / 'proof.json', record)
     print(json.dumps({**record, 'evidence': str(receipt / 'proof.json'),
