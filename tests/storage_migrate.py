@@ -45,6 +45,34 @@ class Migration(unittest.TestCase):
             with tarfile.open(file,'w'): pass
             with self.assertRaisesRegex(RuntimeError,'complete'): m.rootfs_manifest(file)
 
+    def test_compressed_hardlinks_use_cached_hashes_without_seeking(self):
+        with tempfile.TemporaryDirectory() as d:
+            path=Path(d)/'linked.tar.gz'; prefix='backup/container/rootfs/'
+            payload=b'x'*65536
+            with tarfile.open(path,'w:gz') as archive:
+                first=tarfile.TarInfo(prefix+'etc/machine-id'); first.size=len(payload)
+                archive.addfile(first,io.BytesIO(payload))
+                for i in range(110):
+                    entry=tarfile.TarInfo(prefix+'link'+str(i)); entry.type=tarfile.LNKTYPE
+                    entry.linkname=prefix+('etc/machine-id' if i==0 else 'link'+str(i-1))
+                    archive.addfile(entry)
+            extract=tarfile.TarFile.extractfile; regular=[]
+            def checked(archive,entry):
+                self.assertTrue(entry.isfile(),'Hard links must not call extractfile')
+                regular.append(entry.name); return extract(archive,entry)
+            with patch.object(tarfile.TarFile,'extractfile',checked): result=m.rootfs_manifest(path)
+            self.assertEqual(result['entries'],111); self.assertEqual(regular,[prefix+'etc/machine-id'])
+
+    def test_forward_or_external_hardlinks_refuse(self):
+        with tempfile.TemporaryDirectory() as d:
+            for target in ('backup/container/rootfs/later','backup/index.yaml','../../etc/passwd'):
+                path=Path(d)/'bad.tar.gz'
+                with tarfile.open(path,'w:gz') as archive:
+                    entry=tarfile.TarInfo('backup/container/rootfs/link'); entry.type=tarfile.LNKTYPE
+                    entry.linkname=target; archive.addfile(entry)
+                with self.subTest(target=target),self.assertRaisesRegex(RuntimeError,'hard link'):
+                    m.rootfs_manifest(path)
+
     def test_replace_preserves_mode_and_refuses_changed_or_symlinked_files(self):
         with tempfile.TemporaryDirectory() as d:
             file=Path(d)/'file'; file.write_bytes(b'old'); file.chmod(0o600)
@@ -224,6 +252,50 @@ class Migration(unittest.TestCase):
             self.assertEqual(json.loads(installed.read_text()),self.c)
             self.assertEqual(json.loads((directory/'move.json').read_text())['phase'],
                              'rolled-back-awaiting-application-acceptance')
+
+    def exercise_resume(self,change=None):
+        with tempfile.TemporaryDirectory() as d,contextlib.ExitStack() as stack:
+            state=Path(d)/'state'; directory=state/'storage-migrations/move1'; directory.mkdir(parents=True)
+            config=Path(d)/'config'; config.write_text(json.dumps(self.c))
+            root=Path(d)/'backups'; exported=root/'stamp/dev'; exported.mkdir(parents=True)
+            (exported/'data.tar').write_bytes(b'data'); (exported/'rootfs.tar.gz').write_bytes(b'rootfs')
+            before=m.p.instance_spec(self.c,'dev'); before['status']='Running'
+            saved={'owner':m.backup.OWNER,'complete':True,'box':'dev','machine_id':self.c['machine_id'],
+                   'hdd_uuid':self.c['hdd_uuid'],'instance':before,'data_sha256':m.p.digest(exported/'data.tar'),
+                   'rootfs_sha256':m.p.digest(exported/'rootfs.tar.gz')}
+            (exported/'backup.json').write_text(json.dumps(saved))
+            record={'owner':m.m.OWNER,'host':self.c['machine_id'],'migration':'move1','before_config':self.c,
+                    'after_config':{**self.c,'instance_pools':{'dev':'hdd'}},'config_path':str(config),'box':'dev',
+                    'instance_before':before,'trial':'trial1','phase':'failed','failed_step':'stopped-independent-backup',
+                    'backup':str(exported),'error':'interrupted'}
+            obj=copy.deepcopy(before); obj['status']='Stopped'
+            if change=='checksum': (exported/'rootfs.tar.gz').write_bytes(b'corrupt')
+            if change=='phase': record['failed_step']='moving-rootfs-to-hdd'
+            if change=='running': obj['status']='Running'
+            receipt=directory/'move.json'; receipt.write_text(json.dumps(record)); original=copy.deepcopy(record)
+            def patched(owner,name,**kwargs): return stack.enter_context(patch.object(owner,name,**kwargs))
+            patched(m.p,'STATE',new=state); patched(m.h,'host'); patched(m.h,'owned',return_value=obj)
+            patched(m,'verified_trial'); patched(m,'check_installed'); patched(m,'timer_active',return_value=False)
+            patched(m.backup,'backup_root',return_value=root); patched(m.backup,'storage')
+            backup=patched(m.backup,'backup'); finish=patched(m,'finish_move')
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+            if change:
+                with self.assertRaises(RuntimeError): m.resume_backup(self.c,config,'move1')
+                finish.assert_not_called()
+            else:
+                m.resume_backup(self.c,config,'move1'); finish.assert_called_once()
+                self.assertEqual(json.loads((directory/'interrupted-backup.json').read_text()),original)
+            backup.assert_not_called()
+            self.assertEqual(json.loads((exported/'backup.json').read_text()),saved)
+
+    def test_resume_reuses_verified_backup_and_preserves_interruption(self): self.exercise_resume()
+
+    def test_resume_rejects_modified_archive(self): self.exercise_resume('checksum')
+
+    def test_resume_rejects_later_phase(self): self.exercise_resume('phase')
+
+    def test_resume_rejects_running_box(self): self.exercise_resume('running')
 
 
 if __name__=='__main__': unittest.main()

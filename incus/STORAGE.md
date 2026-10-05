@@ -240,6 +240,12 @@ the HDD placement and pass another scratch restore before boot. After boot,
 SSH-key hashes, authorized keys, machine-id, Tailscale node ID/IPs and actual
 UID/GID maps must match. The timer returns to its original active/inactive state.
 
+Rootfs verification streams each archive once, reuses preceding-file hashes for
+hard links, and reports every 10,000 rootfs entries. It never seeks backward
+through gzip to hash a hard-linked file again. Backup/export and copy phases can
+remain quiet while their child commands run; CPU activity alone does not prove
+useful progress. Inspect the saved phase and active child before interrupting.
+
 Success reports `moved-awaiting-application-and-laptop-acceptance`. Check the
 developer's actual application health, browser flow and representative startup
 performance, then resume/flush its existing laptop mapping and verify hot reload.
@@ -253,6 +259,20 @@ generations retain `data.tar`, `rootfs.tar.gz`, `rootfs-hdd.tar.gz` and metadata
 scratch data lives under `/var/backups/chart-incus/restore-checks/storage-<migration>`
 and its `-after` sibling. These may contain private files and credentials. Retain
 them until explicit retirement; routine nightly pruning excludes them.
+
+If initial rootfs verification was interrupted after a completed backup, use:
+
+```sh
+sudo python3 incus/storage_migrate.py resume-backup --config "$CHART_HOST_CONFIG" \
+  --migration <migration-id> --sync-paused --apply
+```
+
+This continuation requires a failed `stopped-independent-backup` or
+`verifying-original-rootfs` phase, a completed backup, unchanged source-pool
+placement/configuration and a stopped box. It preserves the interrupted receipt
+as `interrupted-backup.json`, verifies both archive checksums and continues from
+rootfs verification. It creates neither a replacement first backup nor a second
+instance. A continuation receipt collision refuses another blind retry.
 
 Failure preserves the recorded phase and actual instance state. The box and
 nightly timer can remain stopped; inspect the receipt instead of repeating
