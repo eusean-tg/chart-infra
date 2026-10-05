@@ -11,6 +11,7 @@ import sys
 import urllib.request
 import prep as p
 import host_common as h
+import syslog_fix
 
 PINS = json.loads((p.HERE / 'bare.lock.json').read_text())
 FILES = ('bare-base.sh', 'bare-identity.sh', 'guest-firewall.sh', 'bare.lock.json', 'versions.lock.json')
@@ -99,6 +100,15 @@ def build(a):
         p.query('/1.0/instances?project=' + c['project'], spec, 'POST')
         p.run(['incus', 'start', 'local:' + builder, '--project', c['project']])
         h.wait_ready(c, builder)
+        def check_builder():
+            obj = h.instance(c, builder)
+            p.require(obj['profiles'] == [] and obj['devices'] == spec['devices'], 'Builder devices/profiles differ')
+            p.require(all(obj['config'].get(k) == v for k, v in spec['config'].items()), 'Builder configuration differs')
+            p.require(all(k in spec['config'] or k.startswith(('image.', 'volatile.')) for k in obj['config']),
+                      'Unrecognized builder configuration')
+            return obj
+        # Protect package operations and publication shutdown while retaining syslog delivery.
+        syslog_fix.mitigate(c, builder, check_builder, directory / 'syslog.json')
         h.guest(c, builder, ['install', '-d', '-m', '700', '/root/chart-prep'])
         h.guest(c, builder, ['touch', '/var/lib/chart-bare-builder'])
         for name in ('bare-base.sh', 'guest-firewall.sh'): h.push(c, builder, scripts / name, '/root/chart-prep/' + name)

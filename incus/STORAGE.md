@@ -99,6 +99,32 @@ separate checks. `NonBlocking=yes` controls socket-activation descriptor flags;
 it does not grant rsyslog permission to receive signals under AppArmor.
 [systemd service configuration](https://github.com/systemd/systemd/blob/v259/man/systemd.service.xml)
 
+### Existing-box syslog rollout
+
+After the `stdin-fixed` experiment passes, `incus/syslog_fix.py` verifies rsyslog
+replacement on that retained stopped fixture before modifying the selected
+running personal box:
+
+```sh
+python3 incus/syslog_fix.py --config "$CHART_HOST_CONFIG" --trial "$CHART_TRIAL" --box <personal-box>
+sudo python3 incus/syslog_fix.py --config "$CHART_HOST_CONFIG" --trial "$CHART_TRIAL" --box <personal-box> --apply
+```
+
+The helper installs `chart-nonblocking.conf`, reloads unit definitions, maps the
+guest's single rsyslog process into the host PID namespace, and sends TERM from
+host root through a PID descriptor. This avoids the denied signal path from the
+guest manager and prevents PID reuse from selecting another process. It has no
+KILL fallback. A failed fixture restart or graceful stop prevents live-box
+mutation. Each target's replacement must be unique, nonblocking and delivering
+logs. The personal box and its application services are not restarted.
+
+Receipts live under `/var/lib/chart-incus/syslog-rollouts/<box>/`; existing receipts
+refuse a blind rerun. The personal box also receives a recovery copy at
+`/srv/chart/data/private/systemd/chart-nonblocking.conf`. Inspect a partial failure
+before recovery; a failed logger restart can leave file-based logging stopped
+while journald continues. The helper does not disable confinement or repair the
+underlying AppArmor signal policy. Preserve both fixture and receipts.
+
 Timings are synthetic and affected by filesystem caches and other host workloads.
 They establish neither cold dependency-install performance nor application hot
 reload latency. Application startup, source sync and representative dependency

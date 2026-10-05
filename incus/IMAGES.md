@@ -9,6 +9,16 @@ using [the developer guide](DEVELOPER.md) and their repositories' instructions.
 The host foundation is in [README](README.md). Commands below require operator
 sudo for mutations. They do not update existing boxes or laptop sessions.
 
+Image preparation retains rsyslog with a `NonBlocking=yes` service drop-in at
+`/etc/systemd/system/rsyslog.service.d/chart-nonblocking.conf`. The builder's
+rsyslog is terminated through a validated host PID descriptor and started again
+before package operations. Preparation verifies both syslog readers have
+nonblocking descriptors and checks log delivery; evidence is `syslog.json` in
+the build directory. This mitigates the systemd socket-flush shutdown hang while
+preserving `/var/log/syslog`. It does not change host AppArmor policy.
+Images published before this preparation step require separate mitigation or
+replacement; editing the builder does not modify an existing image.
+
 ## Build and accept a generic image
 
 Use a clean committed checkout. Set explicit absolute paths outside it:
