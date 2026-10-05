@@ -147,6 +147,21 @@ class StorageTrial(unittest.TestCase):
 
 
 class SyslogExperiment(unittest.TestCase):
+    def test_guest_command_cannot_read_operator_terminal(self):
+        with patch.object(s.p, 'run') as run:
+            s.guest({'project': 'chart-dev'}, 'fixture', ['cat', '/fixture'])
+            args = run.call_args.args[0]
+            self.assertIn('--foreground', args)
+            self.assertIn('--disable-stdin', args)
+            self.assertIn('--force-noninteractive', args)
+            self.assertEqual(run.call_args.kwargs['input'], '')
+
+    def test_attempt_names_cannot_escape_receipt_directory(self):
+        for value in ('../other', '/tmp/path', '', 'A'):
+            with self.assertRaises(RuntimeError): s.experiment_path(Path('/fixture'), value)
+        self.assertEqual(s.experiment_path(Path('/fixture'), 'retry1'),
+                         Path('/fixture/syslog-experiment-retry1.json'))
+
     @contextlib.contextmanager
     def fixture(self):
         with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:

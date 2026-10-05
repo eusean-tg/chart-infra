@@ -85,6 +85,13 @@ boot/graceful-stop cycles, the actual nonblocking socket flag, rsyslog file
 delivery, Docker execution and synthetic-file retention. It retains the fixture
 and both receipts. A failed graceful stop has no force-stop fallback.
 
+Guest commands disable stdin and terminal allocation. If an attempt fails before
+installing the drop-in, inspect its receipt and use `--attempt <unique-name>` to
+retain a separate retry receipt. The default is `syslog-experiment.json`; named
+attempts use `syslog-experiment-<name>.json`. A retry refuses an existing drop-in
+or receipt rather than silently repeating mutations. Descriptor checks inspect
+both PID 1 and rsyslog for the same syslog socket inode.
+
 The experiment changes neither the published image nor developer boxes, host
 AppArmor policy or the original trial result. Successful cycles support the
 workaround on the modified fixture; image acceptance and storage migration remain

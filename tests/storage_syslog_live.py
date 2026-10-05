@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import time
 
@@ -15,7 +16,7 @@ import storage_trial as t
 DROPIN = '/etc/systemd/system/rsyslog.service.d/chart-storage-nonblocking.conf'
 CONTENT = '[Service]\nNonBlocking=yes\n'
 CHECK = r'''
-import hashlib,json,os,pathlib
+import hashlib,json,os,pathlib,subprocess
 root=pathlib.Path('/root/chart-storage-fixture')
 result=json.loads((root/'result.json').read_text())
 digest=hashlib.sha256()
@@ -24,26 +25,36 @@ assert digest.hexdigest()==result['sha256'], 'Fixture content changed'
 inodes={line.split()[6] for line in pathlib.Path('/proc/net/unix').read_text().splitlines()[1:]
         if line.split()[-1]=='/run/systemd/journal/syslog'}
 assert len(inodes)==1, 'Expected one syslog socket'
-flags=[]
-for fd in pathlib.Path('/proc/1/fd').iterdir():
-    try: link=os.readlink(fd)
-    except FileNotFoundError: continue
-    if link=='socket:['+next(iter(inodes))+']':
-        info=(pathlib.Path('/proc/1/fdinfo')/fd.name).read_text()
-        value=int(next(x.split()[1] for x in info.splitlines() if x.startswith('flags:')),8)
-        assert value & os.O_NONBLOCK, 'PID 1 syslog socket is blocking'
-        flags.append(oct(value))
-assert flags, 'PID 1 syslog descriptor not found'
-print(json.dumps({'sha256':result['sha256'],'syslog_fd_flags':flags}))
+rsyslog=subprocess.check_output(['systemctl','show','rsyslog','-p','MainPID','--value'],text=True).strip()
+assert rsyslog.isdigit() and int(rsyslog)>1, 'rsyslog has no main PID'
+flags={}
+for label,pid in [('systemd','1'),('rsyslog',rsyslog)]:
+    flags[label]=[]
+    for fd in (pathlib.Path('/proc')/pid/'fd').iterdir():
+        try: link=os.readlink(fd)
+        except FileNotFoundError: continue
+        if link=='socket:['+next(iter(inodes))+']':
+            info=(pathlib.Path('/proc')/pid/'fdinfo'/fd.name).read_text()
+            value=int(next(x.split()[1] for x in info.splitlines() if x.startswith('flags:')),8)
+            assert value & os.O_NONBLOCK, label+' syslog socket is blocking'
+            flags[label].append(oct(value))
+    assert flags[label], label+' syslog descriptor not found'
+print(json.dumps({'sha256':result['sha256'],'syslog_socket_inode':next(iter(inodes)),
+                  'syslog_fd_flags':flags}))
 '''
 
 
 def guest(c, name, args):
-    return p.run(['timeout', '45', 'incus', 'exec', 'local:' + name,
-                  '--project', c['project'], '--', *args])
+    return p.run(['timeout', '--foreground', '--kill-after=5', '45', 'incus', 'exec', 'local:' + name,
+                  '--project', c['project'], '--disable-stdin', '--force-noninteractive', '--', *args], input='')
 
 
-def execute(c, trial):
+def experiment_path(directory, attempt):
+    p.require(re.fullmatch(r'[a-z][a-z0-9-]{0,19}', attempt), 'Use a short lowercase attempt name')
+    return directory / ('syslog-experiment.json' if attempt == 'initial' else f'syslog-experiment-{attempt}.json')
+
+
+def execute(c, trial, attempt='initial'):
     h.host(c)
     name = t.trial_names(trial)[1]
     directory = p.STATE / 'storage-trials' / trial
@@ -56,9 +67,9 @@ def execute(c, trial):
     t.validate_pool(c, p.query('/1.0/storage-pools/' + t.POOL))
     spec = t.fixture_spec(c, name, t.POOL, original['image'], trial)
     p.require(t.validate_fixture(c, name, spec)['status'] == 'Running', 'Expected retained running HDD fixture')
-    proof = directory / 'syslog-experiment.json'
+    proof = experiment_path(directory, attempt)
     p.require(not proof.exists(), 'Experiment receipt exists; inspect before another attempt')
-    record = {'instance': name, 'owner': t.OWNER, 'image': original['image'],
+    record = {'instance': name, 'owner': t.OWNER, 'image': original['image'], 'attempt': attempt,
               'phase': 'collecting', 'cycles': [], 'dropin': DROPIN}
     h.save(proof, record)
     try:
@@ -112,14 +123,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True)
     parser.add_argument('--trial', required=True)
+    parser.add_argument('--attempt', default='initial')
     parser.add_argument('--apply', action='store_true')
     a = parser.parse_args(); c = p.config(a.config); p.check_host(c)
-    print(json.dumps({'fixture': t.trial_names(a.trial)[1], 'dropin': CONTENT,
+    experiment_path(Path('.'), a.attempt)
+    print(json.dumps({'fixture': t.trial_names(a.trial)[1], 'attempt': a.attempt, 'dropin': CONTENT,
                       'force_stop': 'once, synthetic fixture only', 'graceful_shutdown_cycles': 3,
                       'retention': 'fixture, original proof and experiment evidence retained',
                       'apply': a.apply}, indent=2), flush=True)
     if a.apply:
-        with p.locked(): execute(c, a.trial)
+        with p.locked(): execute(c, a.trial, a.attempt)
 
 
 if __name__ == '__main__':
