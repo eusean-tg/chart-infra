@@ -16,7 +16,7 @@ flowchart TB
     Laptop["Developer laptop: repositories, coding agent, Mutagen"]
     Operator["Host operator"]
     subgraph Host["Ubuntu host"]
-        Incus["Incus project and shared SSD pool"]
+        Incus["Incus project and registered storage pools"]
         subgraph Box["Generic personal box"]
             Access["Key-only root SSH and Tailscale"]
             Tools["Ubuntu, Docker/Compose, nvm and build tools"]
@@ -84,41 +84,42 @@ assume partition names or repartition disks.
 
 | Layer | Location | Contents |
 | --- | --- | --- |
-| Host SSD/NVMe root | `/` | Host OS, Incus pool backing file and independent HDD backup archives |
-| Host HDD | Configured `hdd_mount` | Retained per-box directories |
-| Incus btrfs pool | `/var/lib/incus/disks/<pool>.img`, mounted under `/var/lib/incus/storage-pools/<pool>` | Shared sparse-file pool for instance rootfs and image storage |
-| Personal rootfs | Incus-managed container volume in the pool | Guest OS, synced source, installed dependencies, Docker images/volumes and ordinary guest files |
-| Box disk device `data` | `<boxes_root>/<box>` → guest `/srv/chart/data` | Required, idmapped host-directory attachment, separate from the rootfs |
-| Independent backups | Host `/var/backups/chart-incus` | HDD archives, explicit rootfs exports and scratch restores, outside the Incus pool |
+| Host SSD/NVMe root | `/` | Host OS, Incus metadata, SSD pool backing file and independent backup archives |
+| Host HDD | Configured `hdd_mount` | HDD rootfs pool and retained per-box data directories |
+| SSD btrfs pool | `/var/lib/incus/disks/<pool>.img` | Sparse-file pool for instances/images assigned to the default SSD pool |
+| HDD directory pool | `<hdd_mount>/shared-dev/incus` | Rootfs/image storage on the mounted ext4 HDD; ordinary copies rather than btrfs clones |
+| Personal rootfs | Incus-managed volume in its registered pool | Guest OS, synced source, dependencies, Docker stores and ordinary guest files |
+| Box disk device `data` | `<boxes_root>/<box>` → guest `/srv/chart/data` | Required idmapped attachment, retained independently of rootfs |
+| Independent backups | Host `/var/backups/chart-incus` | Data-directory archives, explicit rootfs exports and scratch restores on SSD/NVMe |
 
-The supplied host layout uses `/mnt/hdd`, `/mnt/hdd/shared-dev/boxes` and a shared
-200 GiB btrfs pool. This capacity belongs to the pool, not to each box. A guest
-`df /` reports the pool filesystem, not an exclusive allocation. The sparse pool
-file consumes host SSD blocks as data is written; archives consume additional
-host SSD space outside the pool.
+Host configuration selects the default `pool`; optional `instance_pools` entries
+select `hdd` for individual names. The preparation template retains a 200 GiB
+SSD btrfs default. HDD placement must be explicitly registered; creating an HDD
+pool alone does not change future box placement. Inspect actual root devices.
+[Storage placement procedures](STORAGE.md) cover the HDD pool and cutover.
+
+Pool capacity is shared, not a per-box allocation. The SSD sparse file consumes
+host blocks as data is written. The HDD directory pool shares the HDD filesystem
+with retained data; its copies/snapshots need additional full-copy space.
 
 ```mermaid
 flowchart LR
     subgraph SSD["Host SSD/NVMe"]
-        PoolFile["Sparse pool backing file"]
-        Pool["Shared btrfs pool"]
-        Root["Personal rootfs"]
-        Source["Synced source and installed dependencies"]
-        DockerFiles["Docker images and default volumes"]
-        Archives["/var/backups/chart-incus"]
-        PoolFile --> Pool --> Root
-        Root --> Source
-        Root --> DockerFiles
+        SSDPool["SSD btrfs pool: registered instances and images"]
+        Archives["Independent /var/backups/chart-incus"]
     end
     subgraph HDD["Separate HDD"]
+        HDDPool["HDD directory pool: registered instances and images"]
         Dir["Per-box directory under boxes_root"]
-        Identity["Provisioned SSH/Tailscale identity"]
-        AppData["Developer-managed data and private configuration"]
+        Identity["SSH/Tailscale identity"]
+        AppData["Application data and private configuration"]
         Dir --> Identity
         Dir --> AppData
     end
+    SSDPool -.->|"When SSD selected"| Root["Guest rootfs: source, dependencies, Docker stores"]
+    HDDPool -.->|"When HDD selected"| Root
     Dir -->|"Required idmapped attachment"| GuestData["Guest /srv/chart/data"]
-    Dir -->|"Stopped-box archive copy"| Archives
+    Dir -->|"Stopped-box archive"| Archives
 ```
 
 Neither an Incus rootfs snapshot nor a rootfs export includes the attached HDD
@@ -131,18 +132,18 @@ recursively `chown` the HDD or create an empty replacement to bypass a missing m
 
 | Purpose | Guest location | Responsibility and persistence |
 | --- | --- | --- |
-| Source mirrors | `/srv/chart/source/<repo>` | Developer selects and syncs repositories; SSD |
-| Node version manager | `/opt/nvm` | Infrastructure installs nvm; developer installs Node versions; SSD |
-| Dependencies and package caches | Project/tool-selected paths | Install inside the box; SSD; discover cache paths from the selected package manager |
-| Docker images and default volumes | Docker-managed guest storage | SSD unless explicitly configured otherwise |
+| Source mirrors | `/srv/chart/source/<repo>` | Developer selects and syncs repositories; registered root pool |
+| Node version manager | `/opt/nvm` | Infrastructure installs nvm; developer installs Node versions; registered root pool |
+| Dependencies and package caches | Project/tool-selected paths | Install inside the box; registered root pool; discover cache paths from the selected package manager |
+| Docker images and default volumes | Docker-managed guest storage | Registered root pool unless explicitly configured otherwise |
 | Box identities | `/srv/chart/data/identity/{ssh,tailscale}` | Infrastructure-managed HDD files retained through recreation |
 | Application data | Developer-selected paths under `/srv/chart/data` | HDD; developer initializes services and imports data |
 | Private configuration and credentials | Developer-selected private paths under `/srv/chart/data` | HDD; agent-reviewed imports, separate from synced source |
-| Installed application startup units | `/etc/systemd/system/`, if systemd is selected | Developer-installed SSD files |
+| Installed application startup units | `/etc/systemd/system/`, if systemd is selected | Developer-installed rootfs files |
 | Recovery copies and imports | Developer-selected paths under `/srv/chart/data` | HDD; retain unit copies, configuration, dumps and restore instructions as needed |
 
 A Docker named or anonymous volume uses guest Docker storage by default; its name
-does not place it on HDD. Inspect all service mounts, including image-declared
+does not put it under the retained data attachment or nightly backup coverage. Inspect all service mounts, including image-declared
 volumes. Bind durable data to `/srv/chart/data/<chosen-path>` or explicitly configure
 a volume backed by that directory. Use required source paths so a missing data
 mount cannot silently initialize a replacement database.
@@ -221,7 +222,7 @@ Agents review private environment/key imports using the [developer guide](DEVELO
 
 One-way-safe sync leaves conflicting remote edits for explicit resolution. Flush
 and verify affected repositories before dependent remote tests or restarts.
-A recreated box has empty SSD mirrors and dependencies; pause and reconcile
+A recreated box has empty source mirrors and dependencies; pause and reconcile
 sessions before resuming. HDD retention does not restore source or packages.
 
 ## Backups and recovery
@@ -253,9 +254,9 @@ flowchart TD
 | Application data placed under `/srv/chart/data` | Yes | Recover from a stopped-box copy using the application's restore requirements |
 | HDD private config, keys and box identities | Yes | Treat archives as credentials and enrolled identity material |
 | HDD unit copies, service definitions, imports and exports | Yes | Restore installed files deliberately; copies are not automatically installed |
-| SSD source, dependencies and package caches | No | Resync/reinstall or use a separately retained rootfs export |
+| Rootfs source, dependencies and package caches | No | Resync/reinstall or use a separately retained rootfs export |
 | Active `/etc/systemd/system` files | No | Recover from developer-maintained HDD copies |
-| Default Docker volumes, images and writable layers | No | Repull/rebuild; place durable service data on HDD |
+| Default Docker volumes, images and writable layers | No | Repull/rebuild; place durable service data under `/srv/chart/data` |
 | Host configuration, Incus database and unrelated workload volumes | No | Separate host/workload recovery responsibility |
 
 Archives live at `/var/backups/chart-incus/boxes/<UTC timestamp>/<box>/`.
@@ -288,7 +289,10 @@ Source, dependencies, Docker images, retained rootfs copies and archives grow
 independently. Review unexpected growth even below thresholds. Review at 70% pool
 usage or below 25% host SSD free; pause optional heavy work at 85% pool usage or
 btrfs metadata pressure. Backup checks preserve 25% host-root free space plus
-1 GiB; they cannot reserve space against concurrent host writes.
+1 GiB; they cannot reserve space against concurrent host writes. HDD reporting
+reviews usage at 70% and pauses heavy work at 85%, preserving at least 10 GiB.
+Nightly coverage is the data attachment only, even when both rootfs and data
+are physically on HDD.
 
 Host inotify settings are `max_user_instances=1024` and `max_user_watches=1048576`.
 Box timezone follows the host. Instance creation sets `boot.autostart=false`:

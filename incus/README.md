@@ -140,8 +140,8 @@ recreation uses explicit backup, old-rootfs retention and HDD identity adoption.
 
 | Inside the box | Storage |
 | --- | --- |
-| `/srv/chart/source/<repo>` | SSD source mirror |
-| nvm, node_modules, package caches, Docker data | SSD rootfs |
+| `/srv/chart/source/<repo>` | Source mirror in the registered root pool |
+| nvm, node_modules, package caches, Docker data | Registered root pool |
 | `/srv/chart/data` | Required retained per-box HDD attachment |
 | `/srv/chart/data/identity` | Retained SSH host keys and Tailscale state |
 | Host `/var/backups/chart-incus/boxes/<stamp>/<box>` on NVMe | Nightly HDD copies and explicit rootfs exports |

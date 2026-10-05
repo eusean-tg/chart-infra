@@ -58,7 +58,8 @@ box; it does not require an infrastructure application feature.
 Load `/opt/nvm/nvm.sh` explicitly in noninteractive commands; select the version
 required by `.nvmrc` or repository guidance. Install Linux dependencies in the box.
 Reinstall after lockfile/tool changes as the repository requires. Source and
-node_modules are on SSD; durable data belongs under `/srv/chart/data` on HDD.
+node_modules use the registered root pool; durable data belongs under
+`/srv/chart/data` on HDD. Rootfs storage on HDD does not extend nightly backup coverage.
 
 Compass/mongosh can use `<box>:27017` when the developer publishes Mongo there.
 Use `directConnection=true`, the actual authentication database and privately
@@ -101,7 +102,7 @@ force convergence. After flush succeeds, inspect the process's actual source pat
 watcher logs and readiness.
 
 A stopped box or host-storage failure goes to the operator. Recreation preserves
-HDD identity/data but gives an empty SSD source/dependency environment. Coordinate
+HDD identity/data but gives an empty source/dependency environment. Coordinate
 paused sessions and reinstall tooling/config rather than assuming source is still
 there. Nightly backups cover only HDD data and stop the box briefly; manually
 started apps need the developer's own startup policy. Follow the developer guide

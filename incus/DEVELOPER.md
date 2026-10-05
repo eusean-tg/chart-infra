@@ -139,7 +139,8 @@ Do not modify a tracked path only on the box; make source changes on the laptop.
 
 Use the developer's existing Compose project or adapt repository instructions.
 Keep durable database bind paths under `/srv/chart/data`; default Docker volumes
-live on SSD and are not included in the HDD backup. Developers own Compose and
+live in the box rootfs and are outside the data-directory backup, even when
+the rootfs pool is on HDD. Developers own Compose and
 may run normal lifecycle commands. Check volume bindings before destructive work.
 
 Reference Mongo/Dragonfly shape:
@@ -259,7 +260,7 @@ one-way-replica to erase a remote edit. Use the recorded supervisor for logs/res
 If the box is stopped or host storage is unavailable, contact the operator.
 
 Recreation is for OS/image changes. The operator preserves HDD data and enrolled
-identity, and retains the prior SSD rootfs/export. The replacement has empty source
+identity, and retains the prior rootfs/export. The replacement has empty source
 and no installed project dependencies. Coordinate paused sessions, let the agent
 reconcile/resume them, and reinstall project tooling/configuration. Ordinary
 repository updates do not require recreation.

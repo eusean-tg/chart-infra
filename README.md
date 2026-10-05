@@ -4,7 +4,8 @@ Chart-infra supplies personal Ubuntu 26.04 Incus boxes, Tailscale connectivity,
 laptop-to-box Mutagen sync and retained HDD backup tools. Developers edit
 repositories and run agents on laptops; their agents configure and operate
 applications as root inside their own unprivileged boxes. Source and dependencies
-use the SSD pool; retained data belongs under `/srv/chart/data` on HDD.
+use the box’s registered root pool; retained data belongs under `/srv/chart/data`
+on HDD. Backups remain on SSD/NVMe.
 
 The bare image contains generic development tools. Application versions,
 environment files, dependencies, startup and data belong to each developer.
