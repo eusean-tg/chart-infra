@@ -1,269 +1,242 @@
-# Chart development setup
+# Chart development architecture
 
-Chart-infra gives each developer an unprivileged Ubuntu system container on the
-shared PC. The developer owns its applications and has root SSH inside it. The
-host operator owns Incus, networking, images and backups. Laptop agents edit local
-repositories and use Mutagen plus SSH to work with the box.
+Chart-infra supplies unprivileged Ubuntu system containers with development tools,
+SSH, Tailscale connectivity and retained HDD storage. A freshly provisioned box
+has an empty source directory. Developers use their laptop agents to sync source
+with Mutagen, install dependencies, configure services and run their applications.
 
-This guide describes the installed layout, including Sean's accepted box. The
-installation snapshot is dated **2026-10-05**; inspect before acting on a resource.
-The vault's [environment inventory](/home/sean/obsidian/vault/Chart%20Infra/chart-infra/001%20Environment%20Inventory.md),
-[verification evidence](/home/sean/obsidian/vault/Chart%20Infra/chart-infra/002%20Verification%20and%20Evidence.md)
-and [artifact inventory](/home/sean/obsidian/vault/Chart%20Infra/chart-infra/010%20Artifact%20Inventory%20and%20Cleanup.md)
-hold exact identities, receipts, measurements and cleanup dispositions.
+The host operator owns Incus, images, networking and backups. Developers have root
+inside their boxes and own the application setup. Application source, databases,
+private configuration and application startup units are not included in the image.
 
 ## System map
 
 ```mermaid
 flowchart TB
-    Laptop["Developer laptop: repositories, agent, Vite, Mutagen"]
-    Operator["Host operator: Incus and backup administration"]
-    subgraph PC["Ubuntu workstation"]
-        Incus["Incus project: chart-dev"]
-        subgraph Box["Personal box: sean-dev"]
-            Access["Tailscale and key-only root SSH"]
-            Source["SSD source mirrors and Linux dependencies"]
-            Apps["Native systemd: auth, tharamine, orange"]
-            Docker["Nested Docker Compose: Mongo and Dragonfly"]
+    Laptop["Developer laptop: repositories, coding agent, Mutagen"]
+    Operator["Host operator"]
+    subgraph Host["Ubuntu host"]
+        Incus["Incus project and shared SSD pool"]
+        subgraph Box["Generic personal box"]
+            Access["Key-only root SSH and Tailscale"]
+            Tools["Ubuntu, Docker/Compose, nvm and build tools"]
+            Source["Empty /srv/chart/source at provisioning"]
             Data["Required HDD attachment: /srv/chart/data"]
-            Access --> Source
-            Source --> Apps
-            Apps --> Docker
-            Docker --> Data
+            subgraph Developer["Developer installs after provisioning"]
+                Projects["Synced source and Linux dependencies"]
+                Apps["Developer-selected applications and databases"]
+                Projects --> Apps
+            end
+            Source -.->|"Mutagen sync and dependency installation"| Projects
+            Tools -.->|"Supports developer setup"| Apps
+            Apps -->|"Durable files"| Data
         end
-        Other["Separate k3s workloads: Go infrastructure and retained chart profiles"]
-        Backup["Host nightly backup service"]
-        Copies["NVMe backup archives"]
+        Backup["Host backup service"]
+        Copies["Independent NVMe archives"]
         Incus --> Box
         Data --> Backup --> Copies
     end
-    Laptop -->|"Mutagen over SSH via Tailscale"| Access
-    Laptop -->|"Browser API and Compass via Tailscale"| Box
+    Laptop -->|"Mutagen and commands over SSH"| Access
+    Laptop -.->|"Application access after developer setup"| Apps
     Operator --> Incus
     Operator --> Backup
 ```
 
 Incus system containers share the host kernel. Each has an isolated UID/GID map,
-its own root filesystem and its own Tailscale identity. Guest root is not host
-root. Developers receive no host Incus/Docker socket or kubeconfig.
-No CPU/memory allocation, reservation or cap is configured per box.
+its own root filesystem and its own SSH/Tailscale identity. Guest root is not host
+root. Developers receive no host Incus/Docker socket or kubeconfig. No per-box
+CPU/memory reservation or cap is configured.
 
-The host is an i7-12700 with 12 cores/20 threads and 64 GB installed RAM
-(about 61 GiB visible to Linux). Incus `6.0.5-8` comes from Ubuntu packages.
-The accepted image is Ubuntu 26.04 with Docker 29.1.3, Compose 2.40.3,
-Tailscale 1.102.4 and nvm 0.40.3. Exact infrastructure pins are in
-[versions.lock.json](versions.lock.json) and [bare.lock.json](bare.lock.json).
+## Image, provisioning and application setup
 
-## Instances and images
-
-| Resource in project `chart-dev` | Role and retained state |
-| --- | --- |
-| `sean-dev` | Active developer box; running and checked over SSH on 2026-10-05. Tailnet IPv4 `100.76.252.100`; name `sean-dev.tail28bf29.ts.net`. Enrolled in nightly backups. |
-| `sean-dev-pilot` | Retired application pilot; logged out of Tailscale and stopped in the operator's 2026-10-05 result. Original SSD rootfs, HDD directory and independent backup retained. |
-| `chart-bare-bare-20261002` | Stopped builder for the accepted generic image; retained, not a developer environment or enrolled tailnet device. |
-| `retained-1790943674288022288` | Stopped original rootfs from the recovery proof; its HDD was detached when the replacement adopted it. Never start it as a second identity copy. |
-| `chart-test-bare-20261002-a` and `-b` | Disposable acceptance instances removed. HDD directories, exports and evidence retained. Tailnet admin removal is pending confirmation. |
-
-The stopped-instance states above come from the operator's recorded listing;
-this documentation pass did not obtain a new privileged Incus listing.
-The pilot's tailnet registration also awaits admin removal. Logging out or deleting
-an Incus instance does not remove its Tailscale device entry.
-
-Accepted build: `bare-20261002`. Published image fingerprint:
-
-```text
-0d6270858c5ac848d53437f773cbc2b8b8385abae63ea56ba7cbaadb2c30a582
-```
-
-The image contains development tools, an empty source directory and unenrolled
-SSH/Tailscale identity state. It contains no Node selection, repositories,
-application images, database files or application credentials. Each developer
-installs the project-required versions. Sean's accepted installation uses
-Node 24.20.0, pnpm 11.24.0, Mongo 7.0.43 and Dragonfly 1.36.0.
-
-Images and instances are different objects: retaining or removing the builder
-does not by itself publish, replace or delete the image. Building another image
-also does not upgrade existing boxes. See [image and lifecycle commands](IMAGES.md).
-
-## Physical storage and mounts
-
-The inspected PC has two separate filesystems. Its root is a direct ext4
-partition, not an Ubuntu LVM logical volume.
-
-| Layer | Path/device | Contents |
+| Stage | Infrastructure provides | Developer action |
 | --- | --- | --- |
-| NVMe, nominal 1 TB | `/dev/nvme0n1p2`, ext4 at `/` | Ubuntu, host applications, Incus pool backing file and independent HDD backup archives |
-| HDD, nominal 2 TB | `/dev/sda1`, ext4 at `/mnt/hdd` | Box data directories and separately retained k3s/application data |
-| Incus pool `ssd` | Configured sparse btrfs file `/var/lib/incus/disks/ssd.img`; mounted at `/var/lib/incus/storage-pools/ssd` | Shared 200 GiB pool for instance rootfs/image storage; no disk repartitioning |
-| Personal rootfs | Incus-managed container volume in `ssd` | OS, source, dependencies, Docker images/volumes and ordinary guest files |
-| Box disk device `data` | Host `/mnt/hdd/shared-dev/boxes/<box>` → guest `/srv/chart/data` | Required, idmapped host-directory attachment; separate from the rootfs |
-| Backup destination | Host `/var/backups/chart-incus` | HDD archives, explicit rootfs exports and scratch restore directories, outside the Incus pool |
+| Generic image | Ubuntu 26.04, Docker/Compose, nvm, build tools, Python, Git, SSH/Tailscale packages and guest firewall; empty source and Docker stores | None during image build |
+| Box provisioning | Isolated rootfs, required HDD attachment, fresh SSH host keys, authorized public keys and host-matched timezone | Enroll the box in the team tailnet and verify SSH trust |
+| Source setup | SSH transport and the laptop Mutagen helper | Select local checkouts and sync them to `/srv/chart/source/<repo>` |
+| Application setup | Generic tools and storage | Install project-required runtimes/dependencies, supply private configuration, configure databases and choose startup behavior |
+| Daily work | Connectivity, sync transport and enrolled HDD backups | Edit on the laptop, flush affected repositories, run commands in the box and maintain applications |
+
+The image selects no Node version and contains no repositories, application
+images, database files, application credentials or application service units.
+Docker/Compose being installed does not mean an application stack is deployed.
+Developers may use native processes, systemd or containers according to their
+projects' requirements. Follow the [developer guide](DEVELOPER.md) for setup.
+
+Exact infrastructure versions and artifact checksums are defined in
+[versions.lock.json](versions.lock.json) and [bare.lock.json](bare.lock.json).
+Use an explicitly verified image fingerprint when creating a box. Building an
+image does not update existing instances. An image builder, its published image
+and instances created from that image are separate resources.
+
+Image acceptance uses disposable instances to verify runtime, identity, network
+and recovery behavior. Retained rootfs copies and recovery archives are not
+additional developer environments. Keep identity copies stopped and remove
+tailnet registrations separately when retiring instances. Procedures are in
+[image and lifecycle commands](IMAGES.md).
+
+## Storage layers
+
+Host preparation uses an SSD-backed root filesystem and a separate mounted HDD.
+The host configuration binds operations to the machine, HDD UUID, mount, Incus
+project, pool and bridge. Inspect the actual devices before preparation; do not
+assume partition names or repartition disks.
+
+| Layer | Location | Contents |
+| --- | --- | --- |
+| Host SSD/NVMe root | `/` | Host OS, Incus pool backing file and independent HDD backup archives |
+| Host HDD | Configured `hdd_mount` | Retained per-box directories |
+| Incus btrfs pool | `/var/lib/incus/disks/<pool>.img`, mounted under `/var/lib/incus/storage-pools/<pool>` | Shared sparse-file pool for instance rootfs and image storage |
+| Personal rootfs | Incus-managed container volume in the pool | Guest OS, synced source, installed dependencies, Docker images/volumes and ordinary guest files |
+| Box disk device `data` | `<boxes_root>/<box>` → guest `/srv/chart/data` | Required, idmapped host-directory attachment, separate from the rootfs |
+| Independent backups | Host `/var/backups/chart-incus` | HDD archives, explicit rootfs exports and scratch restores, outside the Incus pool |
+
+The supplied host layout uses `/mnt/hdd`, `/mnt/hdd/shared-dev/boxes` and a shared
+200 GiB btrfs pool. This capacity belongs to the pool, not to each box. A guest
+`df /` reports the pool filesystem, not an exclusive allocation. The sparse pool
+file consumes host SSD blocks as data is written; archives consume additional
+host SSD space outside the pool.
 
 ```mermaid
 flowchart LR
-    subgraph SSD["NVMe: host ext4 root filesystem"]
-        PoolFile["Sparse file: ssd.img, 200 GiB logical pool"]
-        Pool["btrfs pool: ssd"]
-        Root["sean-dev rootfs"]
-        Source["/srv/chart/source; nvm; pnpm; node_modules"]
+    subgraph SSD["Host SSD/NVMe"]
+        PoolFile["Sparse pool backing file"]
+        Pool["Shared btrfs pool"]
+        Root["Personal rootfs"]
+        Source["Synced source and installed dependencies"]
         DockerFiles["Docker images and default volumes"]
         Archives["/var/backups/chart-incus"]
         PoolFile --> Pool --> Root
         Root --> Source
         Root --> DockerFiles
     end
-    subgraph HDD["HDD: ext4 at /mnt/hdd"]
-        Dir["/shared-dev/boxes/sean-dev"]
-        Mongo["mongo/member-0"]
-        Cache["dragonfly"]
-        Identity["identity: SSH and Tailscale"]
-        Private["private, stack, imports, retained exports"]
-        Dir --> Mongo
-        Dir --> Cache
+    subgraph HDD["Separate HDD"]
+        Dir["Per-box directory under boxes_root"]
+        Identity["Provisioned SSH/Tailscale identity"]
+        AppData["Developer-managed data and private configuration"]
         Dir --> Identity
-        Dir --> Private
+        Dir --> AppData
     end
-    Dir -->|"required idmapped attachment"| GuestData["Guest /srv/chart/data"]
-    Dir -->|"stopped-box nightly tar copy"| Archives
+    Dir -->|"Required idmapped attachment"| GuestData["Guest /srv/chart/data"]
+    Dir -->|"Stopped-box archive copy"| Archives
 ```
 
-The 200 GiB pool is shared by all boxes and images; it is not 200 GiB per box.
-A guest `df /` reports the pool filesystem, not its own exclusive allocation.
-The sparse pool file consumes host SSD blocks as data is written. Backups consume
-additional host SSD space outside that pool. Neither an Incus snapshot nor a
-rootfs export includes the attached HDD directory; copy that directory separately.
+Neither an Incus rootfs snapshot nor a rootfs export includes the attached HDD
+directory. Copy that directory separately. Host lifecycle tools validate expected
+devices, isolated ID mapping and the `.chart-incus-box.json` marker. Host numeric
+ownership can differ from guest ownership through the idmapped attachment. Do not
+recursively `chown` the HDD or create an empty replacement to bypass a missing mount.
 
-Incus checks machine/HDD identity, expected devices, isolated ID mapping and the
-`.chart-incus-box.json` marker before lifecycle operations. Host numeric ownership
-can differ from guest ownership through the idmapped attachment. Do not recursively
-`chown` the HDD to make guest access work, or create an empty replacement directory
-to bypass a missing mount.
+## Guest directories and application volumes
 
-## Inside Sean's active box
-
-| Purpose | Guest location | Storage / owner |
+| Purpose | Guest location | Responsibility and persistence |
 | --- | --- | --- |
-| Source mirrors | `/srv/chart/source/{auth-service-backend,tharamine-user-service,orange-v2-backend}` | SSD; source authored on laptop |
-| Node tooling | `/opt/nvm` | SSD; developer-selected Node versions |
-| pnpm store | `/root/.local/share/pnpm/store/v11` | SSD; measured for Sean, discover for other developers |
-| Linux dependencies | Each repository's `node_modules` | SSD; installed inside the box, not synced from macOS |
-| Compose definition | `/srv/chart/data/stack/compose.yaml` and private `.env` | HDD; developer-owned Compose project `chart` |
-| Mongo files | `/srv/chart/data/mongo/member-0` → container `/data/db` | HDD bind mount |
-| Mongo keyfile | `/srv/chart/data/private/mongo/keyfile` → container `/run/mongo/keyfile` | HDD; read-only inside Mongo |
-| Dragonfly snapshots | `/srv/chart/data/dragonfly` → container `/data` | HDD bind mount |
-| Application private config | `/srv/chart/data/private/<repo>/` | HDD; excluded source paths link to private files |
-| npm credentials | `/srv/chart/data/private/npmrc`, linked from `/root/.npmrc` | HDD; private, never copy token values into docs |
-| SSH/Tailscale identities | `/srv/chart/data/identity/{ssh,tailscale}` | HDD; preserves box identity through recreation |
-| Active startup units | `/etc/systemd/system/` | SSD; developer-owned unit installation |
-| Unit recovery copies | `/srv/chart/data/private/systemd/20261005T034156Z/` | HDD; five unit files, effective definitions and restore metadata |
-| Mongo import and local maintenance copies | `/srv/chart/data/imports/`, `/srv/chart/data/backups/` | HDD; retained until explicit cleanup |
+| Source mirrors | `/srv/chart/source/<repo>` | Developer selects and syncs repositories; SSD |
+| Node version manager | `/opt/nvm` | Infrastructure installs nvm; developer installs Node versions; SSD |
+| Dependencies and package caches | Project/tool-selected paths | Install inside the box; SSD; discover cache paths from the selected package manager |
+| Docker images and default volumes | Docker-managed guest storage | SSD unless explicitly configured otherwise |
+| Box identities | `/srv/chart/data/identity/{ssh,tailscale}` | Infrastructure-managed HDD files retained through recreation |
+| Application data | Developer-selected paths under `/srv/chart/data` | HDD; developer initializes services and imports data |
+| Private configuration and credentials | Developer-selected private paths under `/srv/chart/data` | HDD; agent-reviewed imports, separate from synced source |
+| Installed application startup units | `/etc/systemd/system/`, if systemd is selected | Developer-installed SSD files |
+| Recovery copies and imports | Developer-selected paths under `/srv/chart/data` | HDD; retain unit copies, configuration, dumps and restore instructions as needed |
 
-Mongo also has an anonymous Docker volume at `/data/configdb`. The inspected
-volume is empty and lives under the guest `/var/lib/docker/volumes/` on SSD;
-it is **outside nightly HDD backup coverage**. It is not the replica set's main
-`/data/db` mount. Do not assume every Docker volume is on HDD. Before adding a
-service, inspect its mounts and put durable data under `/srv/chart/data`.
+A Docker named or anonymous volume uses guest Docker storage by default; its name
+does not place it on HDD. Inspect all service mounts, including image-declared
+volumes. Bind durable data to `/srv/chart/data/<chosen-path>` or explicitly configure
+a volume backed by that directory. Use required source paths so a missing data
+mount cannot silently initialize a replacement database.
 
-Sean runs application watchers as enabled native systemd services:
-`chart-auth`, `chart-tharamine` and `chart-orange`. Mongo and Dragonfly run in
-Docker with `restart: unless-stopped`. This lets applications return when a
-nightly backup restarts the box. Other developers choose their own supervisor;
-the generic image does not install application startup units.
+Developers choose database topology, authentication, versions, service names and
+ports. They may organize named datasets as separate directories or volumes and
+select them in their own service configuration. There is no infrastructure
+application deployment or dataset-switch command. Runtime teardown must preserve
+retained data unless deletion is explicitly requested.
 
-Mongo is an authenticated single-member `rs0` replica set with a retained keyfile.
-There is no multi-member failover proof or infrastructure dataset-switch command.
-Developers may organize their own named directories/volumes and select them in
-their service configuration. Stopping or tearing down runtime must preserve
-those directories unless deletion is explicitly requested.
+Developers also configure application startup. An enabled systemd unit or an
+appropriate container restart policy can restore a service when a box starts;
+a manually launched process does not restart automatically. Keep recoverable unit
+and configuration copies on HDD and refresh them when the installed files change.
 
 ## Networking and access
 
-Each box joins the existing tailnet as its own device. Developers use their own
-account for enrollment and their own SSH public key; API access follows tailnet
-policy rather than SSH-account sharing. MagicDNS supplies the box name under
-`tail28bf29.ts.net`. Mongo uses ordinary name/IP-and-port access, with no custom
-DNS pilot, SRV lookup, resolver file, private CA or SNI proxy.
+Each box joins the team tailnet as its own device. Developers enroll using their
+own account and connect with their own SSH public key. Guest SSH is key-only root
+access. Teammate application access follows tailnet policy independently of SSH
+credentials. With MagicDNS enabled, clients can use the assigned box hostname.
 
-| Active endpoint | Purpose / reachability |
-| --- | --- |
-| `root@sean-dev:22` | Key-only SSH and Mutagen transport; guest root |
-| `http://sean-dev:3000` | Orange API used by laptop Vite |
-| `sean-dev:4001`, `sean-dev:5001` | Auth and Tharamine HTTP listeners |
-| `sean-dev:27017` | Mongo socket proxy → guest `127.0.0.1:27017` → Docker Mongo |
-| Guest `127.0.0.1:6379` | Dragonfly; no tailnet TCP proxy is configured |
-| Guest ports `9091`, `9092`, `9093` | Additional backend listeners observed on all addresses; not hidden by the guest firewall from authorized tailnet peers |
-
-Compass uses `directConnection=true` and the actual database user's `authSource`.
-Retrieve credentials privately. The Mongo proxy uses `FreeBind=yes` so address
-availability does not prevent its socket from starting. General browser HTTPS
-needs separate certificate setup; the accepted browser path uses laptop Vite
-and HTTP over Tailscale.
+Provisioning supplies SSH/Tailscale connectivity, not application endpoints.
+Developers select service listeners and publish the endpoints their projects need.
+A Tailscale-bound socket proxy to a loopback Docker publication is one supported
+pattern; see the [TCP exposure example](reference/tailnet-tcp.md). Browser HTTPS
+requires separate certificate and application configuration.
 
 ```mermaid
 flowchart LR
-    Laptop["Laptop: SSH, browser, Compass"]
-    Tailnet["Tailscale tunnel and tailnet policy"]
-    Guest["Box tailscale0"]
-    SSH["SSH 22 / Mutagen"]
-    API["Native API 3000"]
-    Socket["Mongo tailnet socket 27017"]
-    Loopback["127.0.0.1:27017"]
-    Mongo["Docker Mongo"]
+    Laptop["Laptop clients and coding agent"]
+    Tailnet["Tailscale tunnel and tailnet access policy"]
+    Guest["Guest tailscale0"]
+    SSH["Provisioned SSH: commands and Mutagen"]
+    subgraph Optional["Developer-configured services"]
+        API["Application listener"]
+        Socket["Optional Tailscale-bound proxy"]
+        Service["Loopback service or Docker publication"]
+        Socket --> Service
+    end
     Laptop --> Tailnet --> Guest
     Guest --> SSH
-    Guest --> API
-    Guest --> Socket --> Loopback --> Mongo
-    Underlay["chartbr0: 10.200.0.0/24"] -.->|"UDP Tailscale transport, NAT"| Tailnet
+    Guest -.-> API
+    Guest -.-> Socket
+    Underlay["Configured host bridge"] -.->|"Encrypted UDP transport via NAT"| Tailnet
 ```
 
-The host bridge is `chartbr0`, gateway `10.200.0.1`, with NAT Internet access.
-Host rules isolate sibling bridge ports and reject private-network/host-management
-access. The selected LAN has an exception for box UDP source port `41641` to allow
-Tailscale direct connections; DERP remains fallback. This is a port-scoped exception,
-not packet authentication. It does not expose application TCP ports on the LAN.
+The host bridge provides NAT Internet access. Host rules isolate sibling bridge
+ports and reject private-network/host-management access. The selected LAN has an
+exception for box UDP source port `41641` to support direct Tailscale connections;
+DERP remains fallback. This is a port-scoped exception, not packet authentication.
+It does not expose application TCP ports on the LAN.
 
 Guest input allows loopback, established traffic, DHCP replies, Tailscale transport
 and traffic arriving on `tailscale0`. The host boundary also handles forwarded
-Docker-published traffic. The guest input firewall does not restrict tailnet
-traffic to a short application port list; tailnet ACLs govern peer access.
-Native apps and SSH can listen on all guest addresses while underlay access is
-blocked. Check Docker publications separately when changing a stack.
+Docker-published traffic. The guest input firewall does not limit tailnet traffic
+to a predefined application port list; tailnet ACLs govern peer access. Check
+listeners and Docker publications when configuring or changing a stack.
 
-The host retains separate k3s workloads, including Go backing infrastructure,
-TimescaleDB, Kafka, Minecraft/OpenScape and retained chart profiles. Repository
-cleanup did not stop these or delete their PV/PVCs. They are not inside `sean-dev`,
-are not covered by its backup, and are not managed by the personal-box tools.
+Unrelated host workloads and their storage are outside personal-box management
+and backup coverage. Do not grant a box host administration to reach them.
 
 ## Source synchronization and private files
 
-Mutagen 0.18.1 runs on the laptop and starts its remote agent through SSH; there is
-no per-box Syncthing deployment. Each selected laptop checkout maps to a box source
-directory. The laptop mapping records endpoints, owned sessions and policy;
-Sean uses `~/.config/chart-box/sean-dev.json`.
+The laptop owns the source and runs the coding agent. Mutagen starts its remote
+agent over SSH and mirrors each selected checkout to `/srv/chart/source/<repo>`.
+Mappings under `~/.config/chart-box/` record endpoints, paths, owned sessions and
+policy. Select the intended mapping explicitly; do not assume laptop paths.
+Use the [chart-box skill](../skills/chart-box/SKILL.md) and its helper.
 
-Normal new source files sync without a Git commit. `.git`, dependencies and build
+Ordinary new source files sync without a Git commit. `.git`, dependencies and build
 outputs stay excluded. Untracked secret-pattern files stay excluded, with the
 helper's sample/example exceptions. Tracked private-pattern exceptions are
-explicit policy: pause and refresh when their tracked status changes. Do not
-silently import `.env.local` or keys as source. Agents review environment imports
-privately using the [developer guide](DEVELOPER.md).
+explicit session policy: pause and refresh when their tracked status changes.
+Agents review private environment/key imports using the [developer guide](DEVELOPER.md).
 
-One-way-safe sync preserves conflicts instead of overwriting remote edits. Flush
-and verify every affected repository before dependent remote tests or restarts.
-A recreated box has empty SSD mirrors/dependencies; pause and reconcile sessions
-before resuming. HDD data/identity retention does not restore source or packages.
+One-way-safe sync leaves conflicting remote edits for explicit resolution. Flush
+and verify affected repositories before dependent remote tests or restarts.
+A recreated box has empty SSD mirrors and dependencies; pause and reconcile
+sessions before resuming. HDD retention does not restore source or packages.
 
 ## Backups and recovery
 
-`chart-box-backup.timer` runs at **04:00 Asia/Kuala_Lumpur**. The installed service
-uses root-owned code under `/var/lib/chart-incus/backup-tool/`, not a live import
-from this checkout. Only explicitly enrolled personal boxes are selected;
-`sean-dev` is enrolled. Builders, test boxes, retained rootfs instances and the
-retired pilot are excluded. Missed runs do not catch up during the day.
+The backup policy is **04:00 Asia/Kuala_Lumpur, seven days of completed nightly
+copies**. Installation of `chart-box-backup.timer` and enrollment of each personal
+box are explicit operator operations. Creation does not enroll a box automatically.
+The installed service uses a root-owned tool snapshot under
+`/var/lib/chart-incus/backup-tool/`. Image builders, test instances and retained
+recovery instances are excluded from automatic backup. Missed runs do not catch
+up during the day.
 
 ```mermaid
 flowchart TD
-    Timer["04:00 timer: enrolled boxes"] --> Validate["Validate host, HDD, ownership and SSD capacity"]
+    Timer["04:00 timer: enrolled personal boxes"] --> Validate["Validate host, HDD, ownership and SSD capacity"]
     Validate --> State["Record original running/stopped state"]
     State --> Stop["Graceful stop when running; no forced stop"]
     Stop --> Copy["Archive HDD directory to NVMe data.tar"]
@@ -277,68 +250,61 @@ flowchart TD
 
 | Material | Nightly HDD copy? | Recovery meaning |
 | --- | --- | --- |
-| Mongo main data, Dragonfly snapshots | Yes | Restore developer-owned database files from a stopped-box copy |
-| HDD private config, keys, npmrc, identities | Yes | Private archive: treat as credentials and enrolled identity material |
-| HDD unit copies, Compose files, imports, local exports | Yes | Restore installed units deliberately; copies are not automatically installed |
-| Source, node_modules, nvm, pnpm store | No | Resync/reinstall or recover from a separately retained rootfs export |
-| Active `/etc/systemd/system` files | No | Recover from their HDD copies; refresh copies after unit changes |
-| Default Docker volumes, images and writable layers | No | Repull/rebuild; move durable service data to HDD |
-| Host configuration, Incus database, k3s volumes | No | Separate host/workload recovery responsibility |
+| Application data placed under `/srv/chart/data` | Yes | Recover from a stopped-box copy using the application's restore requirements |
+| HDD private config, keys and box identities | Yes | Treat archives as credentials and enrolled identity material |
+| HDD unit copies, service definitions, imports and exports | Yes | Restore installed files deliberately; copies are not automatically installed |
+| SSD source, dependencies and package caches | No | Resync/reinstall or use a separately retained rootfs export |
+| Active `/etc/systemd/system` files | No | Recover from developer-maintained HDD copies |
+| Default Docker volumes, images and writable layers | No | Repull/rebuild; place durable service data on HDD |
+| Host configuration, Incus database and unrelated workload volumes | No | Separate host/workload recovery responsibility |
 
 Archives live at `/var/backups/chart-incus/boxes/<UTC timestamp>/<box>/`.
-Nightly copies contain `data.tar` and `backup.json`. A manual backup with
-`--rootfs` also adds `rootfs.tar.gz`. Scratch checks use a separate new directory
-under `/var/backups/chart-incus/restore-checks/`; they never restore over live data.
-Checks validate archive hashes, contents and links. ACL/xattr metadata is archived,
-but its complete restore behavior is not covered by the scratch content check.
+Nightly copies contain `data.tar` and `backup.json`. Manual `--rootfs` backups
+also contain `rootfs.tar.gz`. Scratch checks extract into a new directory under
+`/var/backups/chart-incus/restore-checks/`; they never overwrite live data.
+They validate archive hashes, contents and links. ACL/xattr metadata is archived,
+but its complete restore behavior is outside the scratch content check.
 
 Retention removes only completed nightly HDD-only copies older than seven days
-when a newer completed copy exists. It does not guarantee exactly seven files.
-Manual backups, rootfs exports, incomplete copies and scratch restores remain.
-A failed nightly run skips pruning. No routine operation deletes retained HDD
-source, import archives or stopped instances.
+when a newer completed copy exists. Manual backups, rootfs exports, incomplete
+copies and scratch restores remain. A failed nightly run skips pruning. Routine
+operations do not delete retained source data, imports or stopped instances.
 
-For recreation, the operator pauses laptop sync, backs up HDD and exports rootfs,
-proves scratch restore, retains the old stopped instance, and attaches the original
-HDD to a replacement from the verified image. SSH/Tailscale identities are reused.
-Only one identity copy may run. Reinstall source/dependencies/application startup
-on the replacement. Automatic rollback or arbitrary adoption after instance
-loss is not implemented; inspect the recorded phase before manual recovery.
+For recreation, coordinate a pause of laptop sync. The operator backs up HDD data,
+exports rootfs, proves scratch restore, retains the old stopped instance and
+attaches the original HDD to a replacement from a verified image. SSH/Tailscale
+identities are reused; only one identity copy may run. The developer restores
+source, dependencies and application startup. Automatic rollback and arbitrary
+adoption after instance loss are outside this workflow; inspect the recorded
+phase before manual recovery.
 
-The first enabled backup-service invocation, scratch restore and app return passed
-on 2026-10-05. The next timed run was scheduled for 2026-10-06 04:00 MYT at inspection;
-its result is not claimed here. The independent NVMe copy protects against HDD
-loss, not loss of the whole PC. Off-machine backup is not configured by these tools.
+The independent NVMe copy protects against HDD loss, not loss of the whole host.
+Off-machine backup requires a separate arrangement. See [backup and recovery
+procedures](IMAGES.md) for commands, acceptance checks and failure handling.
 
 ## Capacity, startup and operation
 
-Observed 2026-10-05: host root about 56% used, HDD about 1% used, and the shared
-200 GiB btrfs filesystem about 6% used. These values are measurements, not quotas.
-Source/dependencies, Docker images, retained rootfs copies and archives can grow
+Source, dependencies, Docker images, retained rootfs copies and archives grow
 independently. Review unexpected growth even below thresholds. Review at 70% pool
-usage or below 25% host SSD free; pause optional heavy work at 85% pool use or
-btrfs metadata pressure. Backup capacity checks preserve 25% free plus 1 GiB;
-they cannot reserve space against concurrent workstation writes.
+usage or below 25% host SSD free; pause optional heavy work at 85% pool usage or
+btrfs metadata pressure. Backup checks preserve 25% host-root free space plus
+1 GiB; they cannot reserve space against concurrent host writes.
 
 Host inotify settings are `max_user_instances=1024` and `max_user_watches=1048576`.
-Box timezone follows the host, `Asia/Kuala_Lumpur`. Instance creation configures
-`boot.autostart=false`: a host reboot does not automatically start every box.
-Starting a box enables its infrastructure services; application return depends
-on its developer-owned startup configuration.
+Box timezone follows the host. Instance creation sets `boot.autostart=false`:
+a host reboot does not automatically start every box. Starting a box starts its
+infrastructure services; application return depends on developer configuration.
 
-From the host checkout, these are read-only inspections:
+From the host checkout, use the registered configuration for inspection:
 
 ```sh
-CHART_HOST_CONFIG=/home/sean/.local/state/chart-infra/incus-prep/host.json
+CHART_HOST_CONFIG=/absolute/private/path/host.json
 sudo python3 incus/prep.py status --config "$CHART_HOST_CONFIG"
-sudo incus list local: --project chart-dev
-sudo incus storage volume list local:ssd --project chart-dev
 systemctl status chart-box-backup.timer
 journalctl -u chart-box-backup.service --no-pager -n 40
-df -h / /mnt/hdd
 ```
 
-Use [host preparation](README.md), [image/lifecycle/backup commands](IMAGES.md)
-and [developer setup/daily use](DEVELOPER.md) for changes. Persistent staging and
-retained artifacts belong in the vault inventory. Historical k3s/pilot code is
-preserved at Git commit `edf394f`; it is not a supported deployment entry point.
+Use [host preparation](README.md), [image/lifecycle commands](IMAGES.md) and
+[developer setup/daily use](DEVELOPER.md) for changes. Keep deployment identities,
+capacity measurements, acceptance receipts and retained-artifact inventories in
+the operator's environment records, separate from this reusable architecture.
