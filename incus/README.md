@@ -211,6 +211,24 @@ Application tests, repository secret scanning and seeded-source promotion are no
 part of image acceptance. A failed check records no verified image; inspect the
 retained build.
 
+For an OS-only maintenance image with unchanged networking, operators can select
+local acceptance without enrolling test nodes:
+
+```sh
+sudo python3 incus/image.py image-verify --config "$CHART_HOST_CONFIG" \
+  --build "$CHART_BUILD" --local-only --apply
+```
+
+This runs the generic runtime checks, verifies distinct machine/SSH identities,
+gracefully stops and restarts each disposable test box, rechecks syslog descriptors
+and identities, and inspects the exported image for sanitization and the drop-in.
+The receipt records `verification_scope: local-only` and `network_checks: skipped`.
+It permits creation from that fingerprint but proves neither tailnet access nor
+recreation with retained enrolled identity. No network/recovery proof is inherited
+from another image. Use full acceptance for networking or identity-lifecycle changes;
+a locally verified build can later run `image-verify` without `--local-only` after
+enrollment. Stop failures retain the fixtures; no forced shutdown is used.
+
 Guest provisioning waits up to 90 seconds for systemd and D-Bus. Incus can report
 a started container before those services can handle `timedatectl` or `systemctl`.
 If publication succeeded but test-box provisioning stopped, resume that build:

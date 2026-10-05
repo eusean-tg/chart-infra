@@ -270,6 +270,59 @@ class BareBox(unittest.TestCase):
                 image.verify(SimpleNamespace(config='fixture', build='test', apply=True))
         self.assertEqual(json.loads(path.read_text()), record)
 
+    def test_local_acceptance_needs_no_tailnet_and_refuses_failed_restart(self):
+        from types import SimpleNamespace
+        for failure in (None, 'stop', 'blocking'):
+            with self.subTest(failure=failure):
+                build = 'test-' + (failure or 'pass')
+                directory = self.root / 'bare-images' / build; directory.mkdir(parents=True)
+                targets = image.names(build)[1]
+                record = {'owner': h.OWNER, 'phase': 'acceptance-pending', 'fingerprint': 'fp', 'tests': targets}
+                path = directory / 'build.json'; path.write_text(json.dumps(record))
+                export = directory / 'local-artifact'; export.mkdir(); (export / 'candidate.tar.gz').touch()
+                probes = {}
+                def guest(c, name, args):
+                    self.assertNotEqual(args[0], 'tailscale')
+                    if args[0] == 'cat': return name + '-machine'
+                    if args[0] == 'ssh-keygen': return '256 ' + name + '-ssh fixture'
+                    return ''
+                def syslog(c, name, args):
+                    if args[0] == 'cat': return image.syslog_fix.CONTENT
+                    probes[name] = probes.get(name, 0) + 1
+                    flags = 0 if failure == 'blocking' and probes[name] > 1 else 2048
+                    return json.dumps({'flags': {'systemd': [flags], 'rsyslog': [flags]}})
+                def command(args, **kwargs):
+                    self.assertNotIn('--force', args)
+                    if failure == 'stop' and args[:2] == ['incus', 'stop']:
+                        raise RuntimeError('stop timeout')
+                    return ''
+                with patch.object(image.p, 'STATE', self.root), \
+                     patch.object(image.p, 'config', return_value={'project': 'fixture'}), \
+                     patch.object(image.p, 'check_host'), patch.object(image.p, 'locked', contextlib.nullcontext), \
+                     patch.object(h, 'host'), patch.object(h, 'candidate'), patch.object(h, 'wait_ready'), \
+                     patch.object(h, 'instance', return_value={'status': 'Stopped'}), \
+                     patch.object(h, 'owned', return_value={'config': {'volatile.base_image': 'fp'}}), \
+                     patch.object(h, 'guest', side_effect=guest), patch.object(image.syslog_fix, 'guest', side_effect=syslog), \
+                     patch.object(image.p, 'run', side_effect=command), \
+                     patch.object(image.artifact_check, 'inspect', return_value={'syslog_dropin': 'NonBlocking=yes'}) as inspect, \
+                     patch.object(image.socket, 'create_connection') as network, contextlib.redirect_stdout(io.StringIO()):
+                    args = SimpleNamespace(config='fixture', build=build, apply=True, local_only=True)
+                    if failure:
+                        with self.assertRaises(RuntimeError): image.verify(args)
+                    else:
+                        image.verify(args)
+                        inspect.assert_called_once()
+                    network.assert_not_called()
+                result = json.loads(path.read_text())
+                if failure:
+                    self.assertFalse(result.get('verified', False))
+                    self.assertEqual(result['phase'], 'acceptance-pending')
+                else:
+                    self.assertTrue(result['verified'])
+                    self.assertEqual(result['verification_scope'], 'local-only')
+                    self.assertEqual(result['network_checks'], 'skipped')
+                    self.assertTrue(all(r['graceful_restart'] == 'passed' for r in result['acceptance']))
+
     def test_retention_keeps_manual_and_incomplete_generations(self):
         c = {'hdd_mount': str(self.root), 'machine_id': 'm', 'hdd_uuid': 'u'}
         for stamp, nightly, complete in [('20000101T000000.000000Z', False, True), ('20000102T000000.000000Z', True, False), ('20000103T000000.000000Z', True, True), ('29990101T000000.000000Z', True, True)]:

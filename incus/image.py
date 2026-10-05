@@ -12,6 +12,7 @@ import urllib.request
 import prep as p
 import host_common as h
 import syslog_fix
+import artifact_check
 
 PINS = json.loads((p.HERE / 'bare.lock.json').read_text())
 FILES = ('bare-base.sh', 'bare-identity.sh', 'guest-firewall.sh', 'bare.lock.json', 'versions.lock.json')
@@ -181,18 +182,26 @@ def resume(a):
 
 def verify(a):
     c = p.config(a.config); p.check_host(c); names(a.build)
+    local = getattr(a, 'local_only', False)
     if not a.apply:
-        print('Plan: generic tool, identity, empty-source/image and Tailscale/bridge checks in both enrolled test boxes.'); return
+        print('Plan: generic tool, identity and syslog checks; ' +
+              ('export inspection and graceful restarts, no Tailscale enrollment.' if local else
+               'Tailscale/bridge checks in both enrolled test boxes.')); return
     with p.locked():
         h.host(c)
         directory = p.STATE / 'bare-images' / a.build
         record = json.loads((directory / 'build.json').read_text())
-        p.require(record['owner'] == h.OWNER and record['phase'] == 'acceptance-pending', 'Not an unverified candidate')
+        p.require(record['owner'] == h.OWNER and (record['phase'] == 'acceptance-pending' or
+                  (not local and record.get('verification_scope') == 'local-only')),
+                  'Not an unverified candidate or local-only build awaiting network checks')
         h.candidate(c, record['fingerprint'])
+        if local:
+            p.require(record['tests'] == names(a.build)[1], 'Expected the disposable build test pair')
         for name in record['tests']:
             h.owned(c, name)
-            ts = json.loads(h.guest(c, name, ['tailscale', 'status', '--json']))
-            p.require(ts['BackendState'] == 'Running', 'Enroll both test boxes before verification')
+            if not local:
+                ts = json.loads(h.guest(c, name, ['tailscale', 'status', '--json']))
+                p.require(ts['BackendState'] == 'Running', 'Enroll both test boxes before verification')
         reports = []
         for name in record['tests']:
             obj = h.owned(c, name)
@@ -207,6 +216,25 @@ def verify(a):
                 h.guest(c, name, ['bash', '-ec', 'install -d -m 700 /root/chart-runtime-proof; cd /root/chart-runtime-proof; printf "int main(void) { return 0; }\\n" > main.c; gcc -static main.c -o check; printf "FROM scratch\\nCOPY check /check\\nENTRYPOINT [\\\"/check\\\"]\\n" > Dockerfile; docker build --network=none -t chart-bare-runtime-proof .; docker run --name chart-bare-runtime-proof --network=none chart-bare-runtime-proof'])
                 record.setdefault('runtime_verified', []).append(name)
                 h.save(directory / 'build.json', record)
+            identity = {'box': name, 'machine_id': h.guest(c, name, ['cat', '/etc/machine-id']).strip(),
+                        'ssh_key': h.guest(c, name, ['ssh-keygen', '-lf', '/srv/chart/data/identity/ssh/ssh_host_ed25519_key.pub']).split()[1],
+                        'syslog': syslog}
+            if local:
+                print('Checking graceful restart and syslog flags: ' + name, flush=True)
+                p.run(['incus', 'stop', 'local:' + name, '--project', c['project'], '--timeout=60'])
+                p.require(h.instance(c, name)['status'] == 'Stopped', 'Test box did not stop')
+                p.run(['incus', 'start', 'local:' + name, '--project', c['project']])
+                h.wait_ready(c, name)
+                after = json.loads(syslog_fix.guest(c, name, ['python3', '-c', syslog_fix.PROBE]))
+                p.require(syslog_fix.nonblocking(after), 'Syslog descriptors blocking after restart')
+                p.require(h.guest(c, name, ['cat', '/etc/machine-id']).strip() == identity['machine_id'],
+                          'Machine identity changed after restart')
+                p.require(h.guest(c, name, ['ssh-keygen', '-lf', '/srv/chart/data/identity/ssh/ssh_host_ed25519_key.pub']).split()[1] == identity['ssh_key'],
+                          'SSH identity changed after restart')
+                h.guest(c, name, ['systemctl', 'is-active', 'ssh', 'docker', 'chart-input'])
+                identity.update(graceful_restart='passed', syslog_after_restart=after)
+                reports.append(identity)
+                continue
             ts = json.loads(h.guest(c, name, ['tailscale', 'status', '--json']))
             p.require(ts['BackendState'] == 'Running', 'Enroll test box first')
             ip = next(x for x in ts['Self']['TailscaleIPs'] if ':' not in x)
@@ -217,15 +245,27 @@ def verify(a):
             except OSError: pass
             else:
                 connection.close(); raise RuntimeError('SSH reachable over bridge')
-            reports.append({'box': name, 'machine_id': h.guest(c, name, ['cat', '/etc/machine-id']).strip(),
-                            'ssh_key': h.guest(c, name, ['ssh-keygen', '-lf', '/srv/chart/data/identity/ssh/ssh_host_ed25519_key.pub']).split()[1],
-                            'tailscale_id': ts['Self']['ID'], 'ip': ip, 'syslog': syslog})
-        for key in ('machine_id', 'ssh_key', 'tailscale_id', 'ip'):
+            reports.append({**identity, 'tailscale_id': ts['Self']['ID'], 'ip': ip})
+        for key in (('machine_id', 'ssh_key') if local else ('machine_id', 'ssh_key', 'tailscale_id', 'ip')):
             p.require(reports[0][key] != reports[1][key], 'Duplicated identity: ' + key)
+        if local:
+            export = directory / 'local-artifact'; p.no_symlinks(export)
+            export.mkdir(mode=0o700, exist_ok=True)
+            archives = list(export.glob('candidate.tar*'))
+            if not archives:
+                print('Exporting candidate for image-content verification', flush=True)
+                p.run(['incus', 'image', 'export', 'local:' + record['fingerprint'], str(export / 'candidate'),
+                       '--project', c['project']])
+                archives = list(export.glob('candidate.tar*'))
+            p.require(len(archives) == 1, 'Expected one unified candidate export')
+            record['artifact'] = artifact_check.inspect(archives[0], record['fingerprint'])
         # No automatic default-image alias: operators create from the recorded verified fingerprint.
-        record.update(phase='verified', verified=True, acceptance=reports)
+        record.update(phase='verified', verified=True, acceptance=reports,
+                      verification_scope='local-only' if local else 'local-and-tailnet',
+                      network_checks='skipped' if local else 'passed')
         h.save(directory / 'build.json', record)
-        print(json.dumps({'verified': record['fingerprint'], 'boxes_retained': record['tests']}, indent=2))
+        print(json.dumps({'verified': record['fingerprint'], 'verification_scope': record['verification_scope'],
+                          'network_checks': record['network_checks'], 'boxes_retained': record['tests']}, indent=2))
 
 
 def main():
@@ -240,6 +280,8 @@ def main():
         v = sub.add_parser(command)
         for name in ('config', 'build'): v.add_argument('--' + name, required=True)
         v.add_argument('--apply', action='store_true')
+        if command == 'image-verify':
+            v.add_argument('--local-only', action='store_true', help='Verify local image/runtime and graceful restart; skip tailnet checks')
     a = parser.parse_args()
     if a.command == 'fetch': artifacts(a.nvm_artifacts, fetch=True); print('Pinned nvm files verified.')
     elif a.command == 'image-build': build(a)
