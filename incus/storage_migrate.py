@@ -16,6 +16,8 @@ import host_common as h
 import backup
 import storage_move as m
 import syslog_fix
+import boxes
+import image
 
 TOOL_FILES = ('backup.py', 'host_common.py', 'prep.py', 'versions.lock.json', 'host.example.json')
 TIMER = 'chart-box-backup.timer'
@@ -357,17 +359,106 @@ def resume_backup(c, config_path, migration):
         raise
 
 
+def recreate_on_hdd(c, config_path, migration):
+    """Replace an interrupted pre-move box using its retained HDD identity/data."""
+    h.host(c)
+    directory = p.STATE / 'storage-migrations' / migration; p.no_symlinks(directory)
+    original = json.loads((directory / 'move.json').read_text())
+    p.require(original['owner'] == m.OWNER and original['host'] == c['machine_id']
+              and original['migration'] == migration and original['before_config'] == c
+              and original['config_path'] == str(Path(config_path).absolute()), 'Migration receipt/config differs')
+    p.require(original['phase'] == 'failed' and original['failed_step'] in
+              ('stopped-independent-backup', 'verifying-original-rootfs') and original.get('backup'),
+              'Require the interrupted pre-move backup; inspect other phases')
+    box = original['box']; before = h.owned(c, box)
+    p.require(before['status'] == 'Stopped', 'Original box must remain stopped')
+    m.validate_move(original['instance_before'], before, c['pool'])
+    fingerprint = before['config']['volatile.base_image']
+    script_dir = boxes.scripts(c, fingerprint)
+    m.hdd_capacity(c)
+    p.require(not p.capacity(c)['review'], 'Review capacity before recreation')
+    receipt = directory / 'recreate.json'
+    p.require(not receipt.exists(), 'Recreation already attempted; inspect retained phase')
+    new = {**c, 'instance_pools': {**c.get('instance_pools', {}), box: 'hdd'}}
+    retired = 'retained-ssd-' + str(time.time_ns()); p.box_name(retired)
+    p.require(not any(obj['name'] == retired for obj in p.query(
+        '/1.0/instances?project=' + c['project'] + '&recursion=1')), 'Retained name exists')
+    data = Path(c['boxes_root']) / box
+    expected = original['identity_before']
+    for relative in ('identity/ssh/ssh_host_ed25519_key', 'identity/ssh/ssh_host_rsa_key'):
+        path = data / relative; p.no_symlinks(path)
+        p.require(p.digest(path) == expected['/srv/chart/data/' + relative], 'Retained SSH identity differs')
+    tailscale = data / 'identity/tailscale/tailscaled.state'; p.no_symlinks(tailscale)
+    p.require(tailscale.is_file() and tailscale.stat().st_size > 0, 'Retained Tailscale state missing')
+    exported = Path(original['backup']); p.no_symlinks(exported)
+    p.require(exported.name == box and exported.parent.parent == backup.backup_root(c), 'Unexpected backup location')
+    saved = json.loads((exported / 'backup.json').read_text())
+    p.require(saved.get('complete') and saved['owner'] == backup.OWNER and saved['box'] == box
+              and saved['machine_id'] == c['machine_id'] and saved['hdd_uuid'] == c['hdd_uuid'], 'Invalid retained backup')
+    check_installed(c, box)
+    record = {'box': box, 'host': c['machine_id'], 'action': 'fresh-hdd-box', 'phase': 'preflight',
+              'retained_instance': retired, 'image': fingerprint, 'backup': str(exported),
+              'before_config': c, 'after_config': new}
+    def phase(value):
+        record['phase'] = value; h.save(receipt, record); print(value, flush=True)
+    try:
+        phase('preserving-authorized-keys')
+        keyfile = directory / 'recreate-authorized_keys'
+        p.require(not keyfile.exists(), 'Retained key copy exists; inspect before retry')
+        p.run(['incus', 'file', 'pull', 'local:' + box + '/root/.ssh/authorized_keys', keyfile,
+               '--project', c['project']], input='')
+        keyfile.chmod(0o600)
+        p.require(p.digest(keyfile) == expected['/root/.ssh/authorized_keys'], 'Authorized keys differ')
+        phase('verifying-retained-data-backup')
+        record['restore_check'] = backup.restore(exported, backup.scratch_root() / ('recreate-' + migration), c)
+        phase('retaining-original-ssd-instance')
+        p.require(h.owned(c, box)['status'] == 'Stopped', 'Original box started unexpectedly')
+        p.run(['incus', 'config', 'device', 'remove', 'local:' + box, 'data', '--project', c['project']], input='')
+        p.run(['incus', 'move', 'local:' + box, 'local:' + retired, '--project', c['project']], input='')
+        phase('registering-hdd-placement')
+        set_config(config_path, c, new); h.host(new)
+        phase('creating-fresh-hdd-box')
+        image.create(new, box, fingerprint, keyfile, script_dir, adopt=True)
+        phase('applying-syslog-fix')
+        syslog_fix.mitigate(new, box, lambda: h.owned(new, box), directory / 'recreate-syslog.json', durable=True)
+        phase('checking-retained-identity')
+        deadline = time.monotonic() + 45
+        while True:
+            try:
+                actual = json.loads(m.guest(new, box, ['python3', '-c', IDENTITY])); break
+            except RuntimeError:
+                p.require(time.monotonic() < deadline, 'Retained Tailscale identity did not become ready')
+                time.sleep(1)
+        for key in ('/root/.ssh/authorized_keys', '/srv/chart/data/identity/ssh/ssh_host_ed25519_key',
+                    '/srv/chart/data/identity/ssh/ssh_host_rsa_key', 'tailscale'):
+            p.require(actual[key] == expected[key], 'Adopted identity differs: ' + key)
+        record['identity_after'] = actual
+        record['backup_tool_check'] = check_installed(new, box)
+        if original['timer_was_active']: p.run(['systemctl', 'start', TIMER], input='')
+        phase('ready-for-laptop-application-setup')
+        original['phase'] = 'superseded-by-fresh-hdd-box'; original['recreation_receipt'] = str(receipt)
+        h.save(directory / 'move.json', original)
+        print(json.dumps({'box': box, 'pool': 'hdd', 'retained_stopped_ssd_instance': retired,
+                          'identity': 'SSH keys and Tailscale node/IP preserved', 'data': str(data),
+                          'evidence': str(receipt), 'next': 'Reconcile laptop sync and reinstall applications/dependencies'}, indent=2))
+    except (Exception, KeyboardInterrupt) as error:
+        record.update(failed_step=record['phase'], phase='failed', error=str(error)); h.save(receipt, record)
+        print('Recreation retained for inspection. Do not start the old instance or repeat this command.', file=sys.stderr)
+        raise
+
+
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['move', 'rollback', 'resume-backup'])
+    parser.add_argument('command', choices=['move', 'rollback', 'resume-backup', 'recreate'])
     parser.add_argument('--config', required=True); parser.add_argument('--migration', required=True)
     parser.add_argument('--box'); parser.add_argument('--trial')
     parser.add_argument('--sync-paused', action='store_true'); parser.add_argument('--apply', action='store_true')
     a = parser.parse_args(); c = p.config(a.config); p.check_host(c); p.box_name(a.migration)
     if a.command == 'move':
         p.require(a.box and a.trial, 'Supply --box and verified --trial'); p.box_name(a.box); m.t.trial_names(a.trial)
-    print(json.dumps({'command': a.command, 'box': a.box, 'migration': a.migration,
+    print(json.dumps({'command': a.command, 'box': a.box or 'from retained migration receipt', 'migration': a.migration,
+                      'operation': 'fresh bare box; retain original SSD instance' if a.command == 'recreate' else a.command,
                       'backup_destination': str(backup.BACKUP_HOME), 'rootfs_target': 'original pool' if a.command == 'rollback' else 'hdd',
                       'requires': 'paused laptop sync and stopped-box downtime', 'apply': a.apply}, indent=2), flush=True)
     if a.apply:
@@ -375,7 +466,8 @@ def main():
         with p.locked():
             if a.command == 'move': move(c, a.config, a.box, a.trial, a.migration)
             elif a.command == 'rollback': rollback(c, a.config, a.migration)
-            else: resume_backup(c, a.config, a.migration)
+            elif a.command == 'resume-backup': resume_backup(c, a.config, a.migration)
+            else: recreate_on_hdd(c, a.config, a.migration)
 
 
 if __name__ == '__main__':

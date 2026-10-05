@@ -297,3 +297,34 @@ Review at 70% HDD use and pause heavy work at 85%, preserving at least 10 GiB.
 SSD backup reserve remains 25% plus 1 GiB. Monitoring is explicit, without a
 background cleanup job. Other instances, image caches and the default pool
 remain unchanged by this single-box operation.
+
+### Replace an interrupted pre-move box with a fresh HDD box
+
+For an operator-selected fresh start after an interrupted initial backup check:
+
+```sh
+sudo python3 incus/storage_migrate.py recreate --config "$CHART_HOST_CONFIG" \
+  --migration <migration-id> --sync-paused --apply
+```
+
+This recovery path requires the original stopped source instance and its completed
+data backup. It copies authorized keys, verifies a scratch data restore, detaches
+the HDD from the old instance and renames that stopped instance to
+`retained-ssd-<id>`. It registers HDD placement and uses the existing bare-box
+creation/adoption procedure with the same accepted image. SSH host keys,
+Tailscale state, databases and private files stay in the existing HDD attachment.
+Source, dependencies and other rootfs files stay in the old SSD instance.
+
+The replacement receives the syslog mitigation and must retain SSH keys and
+Tailscale node/IP identity before the original backup timer state is restored.
+OS machine-id and UID-map allocation belong to the fresh instance. Applications
+remain the laptop agent's responsibility: reconcile its paused sessions, restore
+private configuration and startup from retained data, and reinstall dependencies.
+Do not re-enroll Tailscale or initialize an empty database over retained data.
+
+Evidence is `recreate.json`, `recreate-authorized_keys` and `recreate-syslog.json`
+under the selected migration directory; scratch data is
+`/var/backups/chart-incus/restore-checks/recreate-<migration>`. Keep the old instance
+stopped without its data attachment. The original migration receipt is marked
+superseded after success. Failure retains its actual phase for operator recovery;
+do not retry blindly or use the in-place migration rollback for a recreated box.

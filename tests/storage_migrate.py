@@ -297,5 +297,70 @@ class Migration(unittest.TestCase):
 
     def test_resume_rejects_running_box(self): self.exercise_resume('running')
 
+    def exercise_recreate(self, fail_restore=False, wrong_keys=False):
+        with tempfile.TemporaryDirectory() as d,contextlib.ExitStack() as stack:
+            state=Path(d)/'state'; directory=state/'storage-migrations/move1'; directory.mkdir(parents=True)
+            c={**self.c,'boxes_root':str(Path(d)/'boxes')}; data=Path(c['boxes_root'])/'dev'
+            config=Path(d)/'config'; config.write_text(json.dumps(c))
+            before=m.p.instance_spec(c,'dev'); before['status']='Stopped'
+            before['config']['volatile.base_image']='f'*64
+            identity={'/root/.ssh/authorized_keys':m.hashlib.sha256(b'authorized').hexdigest(),
+                      'tailscale':{'id':'node','ips':['100.1.2.3']}}
+            for relative in ('identity/ssh/ssh_host_ed25519_key','identity/ssh/ssh_host_rsa_key',
+                             'identity/tailscale/tailscaled.state'):
+                file=data/relative; file.parent.mkdir(parents=True,exist_ok=True); file.write_bytes(b'synthetic')
+                identity['/srv/chart/data/'+relative]=m.p.digest(file)
+            root=Path(d)/'backups'; exported=root/'stamp/dev'; exported.mkdir(parents=True)
+            (exported/'backup.json').write_text(json.dumps({'owner':m.backup.OWNER,'complete':True,'box':'dev',
+                'machine_id':c['machine_id'],'hdd_uuid':c['hdd_uuid']}))
+            record={'owner':m.m.OWNER,'host':c['machine_id'],'migration':'move1','before_config':c,
+                    'config_path':str(config),'box':'dev','instance_before':before,'phase':'failed',
+                    'failed_step':'stopped-independent-backup','backup':str(exported),
+                    'identity_before':identity,'timer_was_active':True}
+            (directory/'move.json').write_text(json.dumps(record)); events=[]
+            def patched(owner,name,**kwargs): return stack.enter_context(patch.object(owner,name,**kwargs))
+            patched(m.p,'STATE',new=state); patched(m.h,'host'); patched(m.h,'owned',return_value=before)
+            patched(m.boxes,'scripts',return_value=Path(d)); patched(m.m,'hdd_capacity')
+            patched(m.p,'capacity',return_value={'review':False}); patched(m.p,'query',return_value=[])
+            patched(m.backup,'backup_root',return_value=root); patched(m,'check_installed',return_value='passed')
+            def restored(*args):
+                events.append('restore')
+                if fail_restore: raise RuntimeError('restore failed')
+                return {'verified':True}
+            patched(m.backup,'restore',side_effect=restored)
+            def run(args,**kwargs):
+                if args[:3]==['incus','file','pull']:
+                    Path(args[4]).write_bytes(b'wrong' if wrong_keys else b'authorized')
+                    events.append('keys')
+                elif args[:4]==['incus','config','device','remove']: events.append('detach')
+                elif args[:2]==['incus','move']:
+                    self.assertNotIn('--storage',args); events.append('rename')
+                elif args[:2]==['systemctl','start']: events.append('timer')
+                return ''
+            patched(m.p,'run',side_effect=run)
+            patched(m,'set_config',side_effect=lambda *args:events.append('config'))
+            def created(c,name,image,keyfile,scripts,adopt):
+                self.assertEqual(c['instance_pools'],{'dev':'hdd'}); self.assertTrue(adopt); events.append('create')
+            patched(m.image,'create',side_effect=created)
+            patched(m.syslog_fix,'mitigate',side_effect=lambda *args,**kwargs:events.append('syslog'))
+            patched(m.m,'guest',return_value=json.dumps(identity))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+            if fail_restore or wrong_keys:
+                with self.assertRaises(RuntimeError): m.recreate_on_hdd(c,config,'move1')
+                self.assertNotIn('detach',events); self.assertNotIn('create',events)
+            else:
+                m.recreate_on_hdd(c,config,'move1')
+                self.assertEqual(events,['keys','restore','detach','rename','config','create','syslog','timer'])
+                self.assertEqual(json.loads((directory/'recreate.json').read_text())['phase'],
+                                 'ready-for-laptop-application-setup')
+                self.assertEqual(json.loads((directory/'move.json').read_text())['phase'],'superseded-by-fresh-hdd-box')
+
+    def test_recreate_reuses_data_and_retains_original_before_new_box(self): self.exercise_recreate()
+
+    def test_recreate_backup_failure_preserves_old_attachment(self): self.exercise_recreate(fail_restore=True)
+
+    def test_recreate_key_difference_preserves_old_attachment(self): self.exercise_recreate(wrong_keys=True)
+
 
 if __name__=='__main__': unittest.main()
