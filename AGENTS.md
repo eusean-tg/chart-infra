@@ -1,8 +1,7 @@
 # Chart-infra agent instructions
 
-Read README.md. For personal Incus boxes, read incus/README.md and use the
-chart-box skill for developer work. For retained k3s profiles, read
-docs/OPERATIONS.md and docs/AGENT-ONBOARDING.md. Establish the target before acting.
+Read README.md and incus/README.md. Use the chart-box skill for developer work.
+Establish the target before acting.
 
 ## Personal Incus boxes
 
@@ -32,9 +31,6 @@ application assumptions into host/image gates or introduce an application box CL
 - Use SSD for source/dependencies and HDD /srv/chart/data for retained data.
   Monitor capacity; configure no CPU/memory caps or reservations. Preserve
   host-matched timezone, inotify tuning and the Tailscale LAN UDP allowance.
-- Preserve Sean's deployed pilot and laptop sessions until a separately executed
-  migration. Legacy Incus app helpers remain only for that deployed stack. Do not
-  run legacy app acceptance against a developer-owned environment.
 - Before recreation, coordinate paused laptop sessions, stop the box, verify an
   independent HDD backup/scratch restore and retain the SSD rootfs export and old
   stopped instance. Do not start two copies of one Tailscale identity.
@@ -45,15 +41,11 @@ application assumptions into host/image gates or introduce an application box CL
   backups, incomplete generations, rootfs exports and source/data are not pruned.
   Do not delete other retained material without explicit scoped authorization.
 
-## Retained shared k3s environment
+## Scope
 
-Use ./chart with an explicit --profile and the profile's registered Linux owner.
-Preserve host/HDD markers, PV/PVC identity, credentials and data through teardown.
-Keep source fetching, deployment and live capture separate. Vendor collection,
-external metadata refresh and history fetching stay disabled by default; future
-shared capture requires a cluster-enforced deadline. No production changes.
-Keep existing source/config isolation, resource policy and developer access guards.
-The Go pipeline, Minecraft, OpenScape and unrelated services are outside this task.
+Retained k3s profiles and historical pilot data are outside these tools. Preserve
+those resources and unrelated host services. The Go pipeline, Minecraft,
+OpenScape and production are outside this project's scope.
 
 ## Documentation and verification
 

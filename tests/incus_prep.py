@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Offline safety checks; no Incus, firewall or cluster mutations."""
-import copy
 import hashlib
 import importlib.util
 import json
@@ -97,28 +96,14 @@ class Guards(unittest.TestCase):
             self.assertEqual(query.call_count, 1)
 
     def test_box_has_no_inherited_access_or_autostart_or_limits(self):
-        spec = prep.instance_spec(self.c, "sean-dev-pilot")
+        spec = prep.instance_spec(self.c, "developer-box")
         self.assertEqual(spec["profiles"], [])
         self.assertEqual(spec["config"]["security.privileged"], "false")
         self.assertEqual(spec["config"]["boot.autostart"], "false")
         self.assertEqual(spec["config"]["security.idmap.isolated"], "true")
-        self.assertTrue(spec["devices"]["data"]["source"].endswith("/boxes/sean-dev-pilot"))
+        self.assertTrue(spec["devices"]["data"]["source"].endswith("/boxes/developer-box"))
         self.assertNotIn("limits.memory", spec["config"])
         self.assertEqual(set(spec["devices"]), {"root", "eth0", "tun", "data"})
-
-    def test_changed_box_never_adopted(self):
-        spec = prep.instance_spec(self.c, "sean-dev-pilot")
-        spec["config"]["volatile.base_image"] = prep.PINS["image"]["fingerprint"]
-        prep.validate_instance(self.c, "sean-dev-pilot", spec)
-        for kind in ("profile", "mount", "raw", "security"):
-            with self.subTest(kind=kind):
-                broken = copy.deepcopy(spec)
-                if kind == "profile": broken["profiles"] = ["default"]
-                if kind == "mount": broken["devices"]["data"]["source"] = "/home/sean"
-                if kind == "raw": broken["config"]["raw.lxc"] = "lxc.apparmor.profile=unconfined"
-                if kind == "security": broken["config"]["security.idmap.base"] = "100000"
-                with self.assertRaises(RuntimeError):
-                    prep.validate_instance(self.c, "sean-dev-pilot", broken)
 
     def test_plan_does_not_apply(self):
         with patch.object(prep, "check_host"), patch.object(prep, "capacity", return_value={}), \

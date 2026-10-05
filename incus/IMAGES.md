@@ -182,8 +182,8 @@ After acceptance and before handing a box to a developer, retire disposable imag
 test instances and remove their corresponding Tailscale device registrations using
 an authorized account. Stopping a box alone does not remove its registration.
 Preserve HDD directories, archives and evidence unless their deletion is explicitly
-authorized. Keep the working managed pilot until its replacement's application,
-sync and data acceptance pass. No cleanup is performed by this fixture.
+authorized. When replacing a working environment, preserve it until the replacement's
+application, sync and data acceptance pass. No cleanup is performed by this fixture.
 
 ## Published artifact, network boundaries and test retirement
 

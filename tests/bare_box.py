@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline bare-box, backup and repository selection guards."""
 import contextlib
+import copy
 import importlib.util
 import io
 import json
@@ -69,6 +70,29 @@ class BareBox(unittest.TestCase):
         with patch.object(image.p, 'capacity', return_value={'review': False}), patch.object(image.p, 'query', return_value=[]):
             with self.assertRaisesRegex(RuntimeError, 'Retained data'):
                 image.create({'boxes_root': str(self.root), 'project': 'p', 'machine_id': 'm', 'hdd_uuid': 'u'}, 'test', 'fp', None, None)
+
+    def test_changed_box_never_adopted(self):
+        c = json.loads((image.p.HERE / 'host.example.json').read_text())
+        c.update(boxes_root=str(self.root), machine_id='fixture', hdd_uuid='fixture')
+        target = self.root / 'developer-box'; target.mkdir()
+        marker = {'owner': image.p.OWNER, 'name': target.name,
+                  'machine_id': c['machine_id'], 'hdd_uuid': c['hdd_uuid']}
+        (target / '.chart-incus-box.json').write_text(json.dumps(marker))
+        spec = image.p.instance_spec(c, target.name)
+        spec['config']['user.chart-box'] = h.OWNER
+        with patch.object(h, 'instance', return_value=spec):
+            self.assertEqual(h.owned(c, target.name), spec)
+        for kind in ('profile', 'mount', 'raw', 'security', 'limit', 'marker'):
+            broken = copy.deepcopy(spec)
+            if kind == 'profile': broken['profiles'] = ['default']
+            if kind == 'mount': broken['devices']['data']['source'] = '/home/sean'
+            if kind == 'raw': broken['config']['raw.lxc'] = 'lxc.apparmor.profile=unconfined'
+            if kind == 'security': broken['config']['security.idmap.base'] = '100000'
+            if kind == 'limit': broken['config']['limits.memory'] = '8GiB'
+            if kind == 'marker':
+                (target / '.chart-incus-box.json').write_text(json.dumps({**marker, 'name': 'other-box'}))
+            with self.subTest(kind=kind), patch.object(h, 'instance', return_value=broken):
+                with self.assertRaises(RuntimeError): h.owned(c, target.name)
 
     def test_create_authorizes_multiple_devices_and_rejects_invalid_extra_key(self):
         public = []

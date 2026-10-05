@@ -26,9 +26,8 @@ follow the [developer guide](../../incus/DEVELOPER.md) with operator-supplied SS
 host-key fingerprint and developer-selected checkout paths.
 
 This skill's `scripts/sync.py` is the laptop helper. Keep its sibling `policy.py`.
-Invoke it with Python 3.11+ and Mutagen 0.18.1. The operator's existing managed
-pilot may use a different helper/config: do not migrate or terminate those
-sessions implicitly. Locate the intended deployment before using either protocol.
+Invoke it with Python 3.11+ and Mutagen 0.18.1. Preserve sessions outside the
+selected mapping; do not migrate or terminate them implicitly.
 
 ## Flush before remote work
 
@@ -68,7 +67,7 @@ inspect versions/namespaces, preserve the original archive, copy over SCP and
 restore using the [agent procedure](../../incus/DEVELOPER.md#6-import-an-existing-mongo-dump).
 Do not infer permission to drop existing data from an import request.
 
-The pilot API convention is `http://<box>:3000`; discover project overrides. Vite
+The chart API convention is `http://<box>:3000`; discover project overrides. Vite
 can stay on the laptop. Box timezone follows the host; inspect it rather than
 assuming UTC. Box egress is normal Internet access with developer-owned keys.
 Shared k3s capture restrictions do not govern personal-box application work.

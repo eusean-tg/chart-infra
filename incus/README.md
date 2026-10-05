@@ -9,12 +9,10 @@ Read [Bare images and lifecycle](IMAGES.md) for image build, two-instance
 acceptance, box creation/recreation and backups. Read [Developer-agent setup](DEVELOPER.md)
 for repositories, Mutagen pairing, private configuration and daily use. The
 [chart-box skill](../skills/chart-box/SKILL.md) guides laptop agents during remote
-work. Legacy `APPS.md`, `BACKING.md` and `SOURCE-SYNC.md` apply only to Sean's
-retained managed pilot, not personal-box onboarding.
+work.
 
-`prep.py` prepares the host and checks storage/network identity. Its base-image
-`box-create`/`box-provision` path remains for the existing pilot. Personal-box
-creation uses `boxes.py` with an explicitly verified bare-image fingerprint.
+`prep.py` prepares the host and checks storage/network identity. Box creation
+uses `boxes.py` with an explicitly verified bare-image fingerprint.
 Host mutations need operator sudo; developers receive only box-root SSH.
 No CPU/memory caps or reservations are configured. Instances use
 `boot.autostart=false`. Stopping retains their files; application startup inside
@@ -47,8 +45,6 @@ Set explicit absolute paths for subsequent commands:
 ```sh
 CHART_HOST_CONFIG=/absolute/private/path/host.json
 CHART_ARTIFACTS=/absolute/cache/path/incus-artifacts
-CHART_SSH_KEY=/absolute/path/to/developer-public-key.pub
-CHART_BOX=sean-dev-pilot
 python3 incus/prep.py host-prepare --config "$CHART_HOST_CONFIG"
 ```
 
@@ -70,7 +66,7 @@ unrelated installed-package changes, then installs. It does not upgrade Docker,
 restart k3s, repartition disks or format an existing block device. A foreign
 Incus pool/project/network with a matching name is refused. Container support
 uses `incus-base` and `incus-client`, with explicit `dnsmasq-base` for the bridge;
-the QEMU/VM metapackage is outside this pilot. Existing owned
+the QEMU/VM metapackage is outside this container setup. Existing owned
 resources must match their configuration; they are not silently repurposed.
 
 The pool is a new sparse btrfs backing file under `/var/lib/incus/disks/` on the
@@ -165,10 +161,9 @@ bootstrap checks. The host cannot SSH to the box's bridge address by design.
    the real data mount and idmapped writes. Record exact package versions and
    Docker/containerd storage paths. Recheck after stop/start; no existing data
    path is a test fixture.
-3. Use `runtime-proof.py` for the offline build/container/storage checks described
-   below, then pull and execute an explicitly pinned public smoke-test image.
-   Preserve the test volume; no `prune` or `down -v`. A successful
-   `docker info` alone does not prove unprivileged nested runtime compatibility.
+3. Follow [image acceptance](IMAGES.md) for Docker execution, published-port
+   access and retained-storage recovery checks on the disposable test boxes.
+   A successful `docker info` alone does not prove nested runtime compatibility.
    Add syscall interception only if a concrete failure demonstrates the need.
 4. Test host/bridge ingress denial and box underlay denial to host management,
    k3s, LAN and VPN networks, while public package access succeeds. Verify after
@@ -198,8 +193,8 @@ pairing, and no application-side activation helper.
 
 The helper records owned sessions and Git-tracked private-pattern exceptions in
 `~/.config/chart-box/box.json`. It checks overlaps, flushes and verifies content,
-and provides explicit policy refresh. Preserve existing pilot sessions until the
-laptop agent deliberately migrates them; their source layout/protocol differs.
+and provides explicit policy refresh. Select the developer's recorded mapping
+with `--config` on every invocation. Preserve unrelated sessions.
 An operator who needs box SSH must have an explicitly authorized public key;
 the developer's laptop key does not authorize the PC agent.
 
@@ -220,45 +215,13 @@ another running box. Stop retains all data; deletion requires an explicit named
 target. Existing k3s data and historical Mongo/DNS pilots are outside these
 commands.
 
-## Offline runtime proof
-
-Copy `runtime-proof.py` and a verified amd64 statically linked BusyBox binary
-into `/root/chart-prep/` in the box over authenticated SSH or Incus file transfer.
-Record the binary's package version and SHA-256 on the source PC. Pass that
-checksum explicitly; the helper does not download a binary or contact a registry.
-
-Inside the box:
-
-```sh
-python3 /root/chart-prep/runtime-proof.py --box <box-name> \
-  --busybox /root/chart-prep/busybox --sha256 <verified-sha256>
-python3 /root/chart-prep/runtime-proof.py --box <box-name> \
-  --busybox /root/chart-prep/busybox --sha256 <verified-sha256> --apply
-```
-
-The helper requires the matching box/data marker, completed guest preparation,
-an unprivileged UID mapping, SSD Docker storage and no running Docker containers.
-It builds a scratch image with a build-time command, writes a synthetic token
-through Docker mounts to a named volume and the HDD, reads both from a second
-container, and starts that reader again. Build and runtime networking are disabled.
-Each run has a unique fixture name. Images, exited containers, the volume, HDD
-fixture and build context/report are retained, including on failure. The report
-is under `/root/chart-prep/runtime-v1-<id>/report.json`.
-
-This proves nested build/execution and retained reads across container instances;
-it does not prove a whole-box stop/start, backups or application persistence.
-With only exited fixtures present, an operator can separately restart the box's
-Docker daemon and start the retained reader again to test daemon-restart retention.
-Use the pinned Node base from `runtime/Dockerfile` for a separate registry-pull and
-Node-execution check. No host Docker restart is needed for either check.
-
 ## Development checks
 
 ```sh
 python3 tests/incus_prep.py
 python3 tests/bare_box.py
-python3 -m py_compile incus/prep.py incus/firewall.py incus/runtime-proof.py
-bash -n incus/guest-prepare.sh
+python3 tests/bare_boundary.py
+bash -n incus/bare-base.sh incus/bare-identity.sh incus/guest-firewall.sh
 ```
 
 These are offline checks, not live deployment acceptance. Incus 6.0.5 API/CLI
@@ -266,4 +229,4 @@ contracts are checked against its [tagged source](https://github.com/lxc/incus/t
 Storage and firewall behavior follow the official
 [btrfs](https://linuxcontainers.org/incus/docs/main/reference/storage_btrfs/) and
 [firewall coexistence](https://linuxcontainers.org/incus/docs/main/howto/network_bridge_firewalld/)
-references. Validate them on the pinned host before treating the pilot as usable.
+references. Validate them on the pinned host before accepting the host and image.

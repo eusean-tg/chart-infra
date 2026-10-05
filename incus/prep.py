@@ -374,106 +374,6 @@ def instance_spec(c, name):
                                  "path": "/srv/chart/data", "shift": "true", "required": "true"}}}
 
 
-def validate_instance(c, name, obj):
-    wanted = instance_spec(c, name)
-    require(obj["profiles"] == [], "Unexpected inherited profiles")
-    require(obj["devices"] == wanted["devices"], "Instance devices differ; do not adopt or reconfigure")
-    for k, v in wanted["config"].items():
-        require(obj["config"].get(k) == v, "Instance config differs: " + k)
-    require(not any(k.startswith(("raw.", "limits.")) for k in obj["config"]), "Unexpected raw options or resource limits")
-    require(obj["config"].get("volatile.base_image") == PINS["image"]["fingerprint"], "Wrong Ubuntu image")
-    require(all(k in wanted["config"] or k.startswith(("image.", "volatile.")) for k in obj["config"]),
-            "Unexpected instance configuration; review before using this instance")
-
-
-def box_create(c, args):
-    check_host(c)
-    name = box_name(args.name)
-    key = public_key(args.ssh_key)
-    print(json.dumps({"mode": "apply" if args.apply else "plan", "instance": instance_spec(c, name),
-                      "ssh_key_sha256": hashlib.sha256(key.encode()).hexdigest(), "result": "stopped box"}, indent=2))
-    if not args.apply:
-        return
-    with locked():
-        require(HOST_CONFIG.exists() and json.loads(HOST_CONFIG.read_text()) == c, "Run host-prepare first")
-        require(not capacity(c)["review"], "Review capacity before creating another box")
-        directory = artifacts(args.artifacts)
-        boxes = query(f"/1.0/instances?project={c['project']}&recursion=1")
-        existing = next((b for b in boxes if b["name"] == name), None)
-        private = STATE / "boxes" / name
-        target = Path(c["boxes_root"]) / name
-        marker = target / ".chart-incus-box.json"
-        identity = {"owner": OWNER, "name": name, "machine_id": c["machine_id"], "hdd_uuid": c["hdd_uuid"]}
-        no_symlinks(target)
-        if existing:
-            validate_instance(c, name, existing)
-            require(marker.is_file() and json.loads(marker.read_text()) == identity, "Missing or changed HDD box marker")
-            require((private / "authorized_key").read_text() == key, "Public key differs; no implicit key rotation")
-            print("Existing owned box retained; no start or reconfiguration.")
-            return
-        # The private intent permits recovery only of a marked, still-empty failed creation.
-        if target.exists():
-            require((private / "intent.json").is_file() and marker.is_file(), "Refusing an existing unregistered data directory")
-            require(json.loads(marker.read_text()) == identity and list(target.iterdir()) == [marker],
-                    "Retained box data exists without its instance; explicit recovery is required")
-        else:
-            require(not private.exists(), "Missing previously registered data directory; refusing replacement")
-            target.mkdir(mode=0o700)
-        write_owned(private / "intent.json", json.dumps(identity, indent=2) + "\n")
-        write_owned(private / "authorized_key", key)
-        write_owned(marker, json.dumps(identity, indent=2) + "\n")
-        images = query(f"/1.0/images?project={c['project']}&recursion=1")
-        if not any(i["fingerprint"] == PINS["image"]["fingerprint"] for i in images):
-            run(["incus", "image", "import", directory / "incus.tar.xz", directory / "rootfs.tar.xz",
-                 "local:", "--project", c["project"]], capture=False)
-        query(f"/1.0/instances?project={c['project']}", instance_spec(c, name), "POST")
-        obj = query(f"/1.0/instances/{name}?project={c['project']}")
-        validate_instance(c, name, obj)
-        write_owned(private / "created.json", json.dumps(obj, indent=2) + "\n")
-        print("Stopped box created. Use box-provision for the separate networked package preparation.")
-
-
-def box_provision(c, args):
-    check_host(c)
-    name = box_name(args.name)
-    print("Provision Ubuntu packages, Docker/Compose, Tailscale (unenrolled), key-only SSH and guest firewall.")
-    print("No source fetch, Mutagen session, application, data initialization or tailnet enrollment.")
-    if not args.apply:
-        return
-    with locked():
-        require(json.loads(HOST_CONFIG.read_text()) == c, "Host config differs")
-        directory = artifacts(args.artifacts)
-        obj = query(f"/1.0/instances/{name}?project={c['project']}")
-        validate_instance(c, name, obj)
-        require(not capacity(c)["review"], "Review capacity before package preparation")
-        target = Path(c["boxes_root"]) / name
-        no_symlinks(target)
-        identity = json.loads((STATE / "boxes" / name / "intent.json").read_text())
-        require(json.loads((target / ".chart-incus-box.json").read_text()) == identity, "HDD marker differs")
-        require(not (target / "identity/guest-prepared").exists(), "Already provisioned; use status. No implicit package update.")
-        run(["systemctl", "reload", "chart-incus-firewall.service"], capture=False)
-        if obj["status"] == "Stopped":
-            run(["incus", "start", "local:" + name, "--project", c["project"]], capture=False)
-        prefix = ["incus", "exec", "local:" + name, "--project", c["project"], "--"]
-        run([*prefix, "timeout", "90", "sh", "-c", "until test -r /etc/resolv.conf && ip -4 route | grep -q default; do sleep 1; done"])
-        run([*prefix, "mountpoint", "-q", "/srv/chart/data"])
-        # This tests idmapped writes only in the new box's private identity directory.
-        run([*prefix, "install", "-d", "-m", "700", "/srv/chart/data/identity", "/root/chart-prep"])
-        files = {"guest-prepare.sh": HERE / "guest-prepare.sh", "versions.lock.json": HERE / "versions.lock.json",
-                 "tailscale.deb": directory / "tailscale.deb", "authorized_key": STATE / "boxes" / name / "authorized_key"}
-        for dst, src in files.items():
-            run(["incus", "file", "push", src, f"local:{name}/root/chart-prep/{dst}", "--project", c["project"]])
-        selected = [p + "=" + PINS["packages"][p] for p in
-                    ("docker.io", "docker-compose-v2", "openssh-server", "nftables", "iptables")]
-        timezone = run(["timedatectl", "show", "--property=Timezone", "--value"]).strip()
-        require(timezone and Path("/usr/share/zoneinfo", timezone).is_file(), "Host timezone is unavailable")
-        run([*prefix, "env", "DEBIAN_FRONTEND=noninteractive", "bash", "/root/chart-prep/guest-prepare.sh", timezone, *selected], capture=False)
-        mapped = query(f"/1.0/instances/{name}?project={c['project']}")
-        write_owned(STATE / "boxes" / name / "idmap.json", json.dumps({k: v for k, v in mapped["config"].items()
-                    if "idmap" in k}, indent=2) + "\n")
-        print("Prepared box is running without applications. Complete runtime/network proof before laptop enrollment.")
-
-
 def inspect():
     print(json.dumps({"machine_id": Path("/etc/machine-id").read_text().strip(),
         "hdd": json.loads(run(["findmnt", "-J", "-M", "/mnt/hdd", "-o", "TARGET,UUID,FSTYPE"])),
@@ -498,10 +398,10 @@ def status(c):
         snapshots = query(f"/1.0/instances/{name}/snapshots?project={c['project']}&recursion=1")
         print(json.dumps({"box": name, "snapshots": [s["name"] for s in snapshots]}))
         if box["status"] != "Running":
-            print("Stopped: per-box Docker/cache usage unmeasured.")
+            print("Stopped: per-box Docker/source usage unmeasured.")
             continue
         prefix = ["incus", "exec", "local:" + name, "--project", c["project"], "--"]
-        for command in (["docker", "system", "df"], ["du", "-sx", "--block-size=1", "/srv/chart/cache/pnpm"]):
+        for command in (["docker", "system", "df"], ["du", "-sx", "--block-size=1", "/srv/chart/source"]):
             try:
                 print(run([*prefix, *command]))
             except RuntimeError:
@@ -515,16 +415,11 @@ def main():
     sub.add_parser("inspect")
     fetch = sub.add_parser("fetch", help="Download and verify pinned public artifacts; does not deploy")
     fetch.add_argument("--artifacts", required=True)
-    for name in ("host-prepare", "host-tune", "box-create", "box-provision", "status"):
+    for name in ("host-prepare", "host-tune", "status"):
         p = sub.add_parser(name)
         p.add_argument("--config", required=True)
         if name != "status":
             p.add_argument("--apply", action="store_true", help="Apply; omission prints a plan")
-        if name.startswith("box-"):
-            p.add_argument("--name", required=True)
-            p.add_argument("--artifacts", required=True)
-        if name == "box-create":
-            p.add_argument("--ssh-key", required=True)
         if name in ("host-tune", "host-prepare"):
             p.add_argument("--lan-cidr", help="Connected RFC1918 LAN; auto-select only when unambiguous")
     args = parser.parse_args()
@@ -538,10 +433,6 @@ def main():
             host_prepare(c, args.apply, args.lan_cidr)
         elif args.command == "host-tune":
             host_tune(c, args.lan_cidr, args.apply)
-        elif args.command == "box-create":
-            box_create(c, args)
-        elif args.command == "box-provision":
-            box_provision(c, args)
         else:
             status(c)
 

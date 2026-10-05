@@ -21,9 +21,6 @@ node_modules/
 .pnpm-store/
 .venv/
 .DS_Store
-.stfolder/
-.stignore
-.stversions/
 # Runtime evidence/config and database files belong outside the checkout.
 /.local/
 /state/

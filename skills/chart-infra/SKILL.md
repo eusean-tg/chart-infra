@@ -1,6 +1,6 @@
 ---
 name: chart-infra
-description: Operate the chart-infra host foundation, generic Incus image, personal-box lifecycle and HDD backups, or the retained shared k3s profiles. Use chart-box for developer application work and laptop-to-box source synchronization. Exclude the separate Go pipeline and production.
+description: Operate the chart-infra host foundation, generic Incus image, personal-box lifecycle and HDD backups. Use chart-box for developer application work and laptop-to-box source synchronization. Exclude the separate Go pipeline and production.
 ---
 
 # Chart infrastructure operator
@@ -25,8 +25,7 @@ of adding another infrastructure app guard or CLI.
 
 Use `skills/chart-box/SKILL.md` and `incus/DEVELOPER.md` for laptop agents. Discover
 paths and use their recorded box mapping. Do not operate laptop sessions from host
-assumptions. Preserve Sean's managed pilot and its legacy helpers until migration
-is explicitly executed; do not run app fixtures as bare-box acceptance.
+assumptions or run application fixtures as bare-box acceptance.
 
 Keep SSD source/dependencies, the required verified HDD data attachment, isolated
 UID maps, host firewall, inotify settings and host-matched timezone. No CPU/memory
@@ -49,21 +48,8 @@ registrations after acceptance; retain HDD data and evidence. Developers own
 app startup after boot. Manual backups, rootfs exports and incomplete generations
 are retained. No other pruning/deletion is authorized by routine setup.
 
-## Retained k3s profiles
-
-Use `./chart` with an explicit `--profile`. Read `docs/GETTING-STARTED.md`,
-`docs/OPERATIONS.md` and `docs/AGENT-ONBOARDING.md` for the requested operation.
-The context helper is read-only:
-
-```sh
-python3 <skill-directory>/scripts/context.py --repo <checkout> --profile <developer> --cluster --fingerprints
-```
-
-Do not pass box names to the k3s runner. Keep profile ownership, HDD/PV/PVC guards,
-private credentials and retained data. Its `up` uses prepared source/config/deps;
-source fetching, deployment and capture are separate. Vendor collectors, external
-metadata/history refresh remain disabled. Future shared capture needs a
-cluster-enforced deadline. Do not change production or unrelated host services.
+Retained k3s deployments and historical pilot data are outside these tools.
+Preserve them unless the operator explicitly authorizes a separate retirement.
 
 ## Report and document
 

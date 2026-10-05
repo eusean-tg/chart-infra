@@ -60,8 +60,8 @@ Setup writes `~/.config/chart-box/box.json`, with the box/SSH target, discovered
 laptop paths, `/srv/chart/source/<repo>` destinations and owned session IDs. A
 separate `--config` supports another box. New sessions start paused. Setup refuses
 source overlap with other Mutagen sessions or discoverable Syncthing folders,
-and refuses existing included source at a fresh destination. Existing pilot
-sessions require a deliberate migration; do not point this helper at their paths.
+and refuses existing included source at a fresh destination. Sessions from other
+workflows require deliberate migration; do not reuse their paths implicitly.
 Inspect prior sessions only if present; if already retired, cite their recorded
 disposition instead of recreating their mapping or running retirement again.
 
@@ -168,10 +168,6 @@ Reference Mongo/Dragonfly shape:
   Match `authSource` to where the user was created. Plain TCP over Tailscale needs
   no Mongo CA or resolver configuration.
 
-The managed pilot's actual Compose construction and socket forwarding patterns
-remain in [backing.py](backing.py) (`compose_spec`, `proxy`) and
-[box.py](box.py) (`proxy`). They are optional reference code; do not install their
-inventory/dependency/identity enforcement as personal-box infrastructure.
 For a developer-owned Compose stack, a minimal Mongo port/data fragment is:
 
 ```yaml
@@ -242,7 +238,7 @@ infrastructure dataset registry or adoption CLI.
 2. Flush the relevant session, then run tests or inspect the backend over SSH.
 3. Reinstall dependencies in the box after dependency changes, following the repo.
 4. Run Vite locally with its API proxy aimed at `http://<box>:3000` (or the chosen
-   backend port). Plain HTTP over Tailscale is the pilot default; HTTPS is separate.
+   backend port). Plain HTTP over Tailscale is the development default; HTTPS is separate.
    For kiyotaka-frontend, inspect `VITE_BACKEND_DOMAIN` and
    `VITE_CME_SNAPSHOT_PROXY_TARGET` in its current configuration. Preserve old values
    before switching. General Tailscale HTTPS needs the tailnet admin's setting.
