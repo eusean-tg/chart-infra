@@ -167,6 +167,12 @@ def capacity(c):
     disk = shutil.disk_usage("/")
     report = {"host_total_bytes": disk.total, "host_free_bytes": disk.free,
               "host_free_fraction": round(disk.free / disk.total, 4), "review": disk.free / disk.total < .25}
+    if c.get('instance_pools'):
+        hdd = shutil.disk_usage(c['hdd_mount'])
+        report['hdd'] = {'total_bytes': hdd.total, 'free_bytes': hdd.free,
+                         'free_fraction': round(hdd.free / hdd.total, 4)}
+        report['review'] |= hdd.free < max(hdd.total * .30, 10 * 1024**3)
+        report['hdd_pause_heavy_work'] = hdd.free < max(hdd.total * .15, 10 * 1024**3)
     if shutil.which("incus") and os.geteuid() == 0:
         pools = query("/1.0/storage-pools?recursion=1")
         if any(p["name"] == c["pool"] for p in pools):

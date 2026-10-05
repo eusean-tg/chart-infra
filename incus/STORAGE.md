@@ -206,3 +206,74 @@ nightly data-directory backup.
 
 The trial command performs none of those migration operations. Record its result
 and reconcile the target pool with infrastructure-management plans before cutover.
+
+### Move a personal box
+
+`storage_migrate.py` moves one running personal box from the default SSD pool to
+the owned HDD pool. It requires a verified matching-image round trip, no Incus
+snapshots on the selected box, a nonblocking syslog socket and paused laptop sync.
+The operator must flush and pause the selected laptop mapping first; the host
+cannot verify laptop session state. Leave sessions paused through acceptance or
+rollback. Coordinate other host operators to exclude independent Incus changes.
+
+```sh
+python3 incus/storage_migrate.py move --config "$CHART_HOST_CONFIG" \
+  --box <personal-box> --trial <verified-trial-id> --migration <unique-migration-id>
+sudo python3 incus/storage_migrate.py move --config "$CHART_HOST_CONFIG" \
+  --box <personal-box> --trial <verified-trial-id> --migration <unique-migration-id> \
+  --sync-paused --apply
+```
+
+The apply holds the chart infrastructure lock and pauses the nightly timer. It
+saves the installed backup-tool files, installs the compatible tool snapshot,
+stops the box gracefully, and creates an independent data archive and rootfs
+export on SSD. It verifies a scratch data restore and reserves capacity for
+rollback before moving rootfs. The selected box keeps its HDD disk device,
+guest paths and UID map. Copy-time identity changes are repaired while stopped
+using the fixture-tested procedure above.
+
+A second stopped rootfs export must match the first for file contents, numeric
+ownership, modes, symbolic links, ACLs and extended attributes. Only then does
+the helper update both host-config copies with the box's `instance_pools` entry.
+The installed backup tool must validate ownership, produce a data backup from
+the HDD placement and pass another scratch restore before boot. After boot,
+SSH-key hashes, authorized keys, machine-id, Tailscale node ID/IPs and actual
+UID/GID maps must match. The timer returns to its original active/inactive state.
+
+Success reports `moved-awaiting-application-and-laptop-acceptance`. Check the
+developer's actual application health, browser flow and representative startup
+performance, then resume/flush its existing laptop mapping and verify hot reload.
+No replacement image, Tailscale enrollment or source-sync session is needed.
+These checks do not boot a restored rootfs archive; the scratch restore covers
+the attached data. The original pool remains available for rollback.
+
+Receipts and backup-tool originals live under
+`/var/lib/chart-incus/storage-migrations/<migration>/`. SSD manual backup
+generations retain `data.tar`, `rootfs.tar.gz`, `rootfs-hdd.tar.gz` and metadata;
+scratch data lives under `/var/backups/chart-incus/restore-checks/storage-<migration>`
+and its `-after` sibling. These may contain private files and credentials. Retain
+them until explicit retirement; routine nightly pruning excludes them.
+
+Failure preserves the recorded phase and actual instance state. The box and
+nightly timer can remain stopped; inspect the receipt instead of repeating
+`move`. With sync still paused, use:
+
+```sh
+sudo python3 incus/storage_migrate.py rollback --config "$CHART_HOST_CONFIG" \
+  --migration <migration-id> --sync-paused --apply
+```
+
+Rollback validates known old/new configuration, restores any verified copy-time
+metadata and moves the stopped rootfs back through Incus. It restores both host
+configurations and the saved backup-tool snapshot, then boots and checks identity
+before restoring the timer. It does not overwrite data from an archive. Foreign
+configuration, changed backup-tool files, identity changes or inadequate SSD
+capacity refuse rollback for operator review. Application and laptop acceptance
+remain required after rollback. Rootfs exports are retained for separate disaster
+recovery if a supported reverse move cannot complete.
+
+`prep.py status` reports HDD free space when per-box HDD placement is registered.
+Review at 70% HDD use and pause heavy work at 85%, preserving at least 10 GiB.
+SSD backup reserve remains 25% plus 1 GiB. Monitoring is explicit, without a
+background cleanup job. Other instances, image caches and the default pool
+remain unchanged by this single-box operation.

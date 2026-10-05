@@ -52,7 +52,7 @@ def validate_move(before, after, pool):
     devices = copy.deepcopy(before['devices']); devices['root']['pool'] = pool
     p.require(after['devices'] == devices and after['profiles'] == before['profiles'],
               'Move changed devices other than root pool, or profiles')
-    for key in ('name', 'type', 'architecture'):
+    for key in ('name', 'type', 'architecture', 'ephemeral', 'description'):
         p.require(after.get(key) == before.get(key), 'Move changed ' + key)
     def stable(config):
         return {key: value for key, value in config.items() if key not in RUNTIME_KEYS and value != ''}

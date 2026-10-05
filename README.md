@@ -43,6 +43,7 @@ python3 tests/bare_box.py
 python3 tests/bare_boundary.py
 python3 tests/storage_trial.py
 python3 tests/storage_move.py
+python3 tests/storage_migrate.py
 python3 tests/syslog.py
 bash -n incus/bare-base.sh incus/bare-identity.sh incus/guest-firewall.sh
 ```
