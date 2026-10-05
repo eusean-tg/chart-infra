@@ -73,6 +73,14 @@ def host(c):
     for resource, key in [('projects', 'project'), ('networks', 'bridge'), ('storage-pools', 'pool')]:
         obj = p.query('/1.0/' + resource + '/' + c[key])
         p.require(obj['config'].get('user.chart-infra') == p.OWNER, 'Foreign Incus resource')
+    if c.get('instance_pools'):
+        obj = p.query('/1.0/storage-pools/hdd')
+        target = Path(c['hdd_mount']) / 'shared-dev/incus'; p.no_symlinks(target)
+        p.require(obj['driver'] == 'dir' and obj['config'].get('source') == str(target)
+                  and obj['config'].get('user.chart-infra') == p.OWNER, 'HDD pool identity differs')
+        p.require(target.is_dir() and target.stat().st_uid == 0
+                  and target.stat().st_dev == Path(c['hdd_mount']).stat().st_dev,
+                  'HDD pool source is not on the registered HDD')
 
 
 def candidate(c, fingerprint, verified=False):

@@ -63,13 +63,19 @@ def no_symlinks(path):
 def config(path):
     c = json.loads(Path(path).read_text())
     expected = json.loads((HERE / "host.example.json").read_text())
-    require(set(c) == set(expected), "Host config fields must match host.example.json")
+    require(set(expected) <= set(c) <= set(expected) | {'instance_pools'},
+            "Host config fields must match host.example.json plus optional instance_pools")
     require(re.fullmatch(r"[a-f0-9]{32}", c["machine_id"]), "Set the actual host machine_id")
     require(re.fullmatch(r"[a-fA-F0-9-]{36}", c["hdd_uuid"]), "Set the actual HDD UUID")
     for key in ("project", "pool"):
         require(re.fullmatch(r"[a-z][a-z0-9-]{1,30}", c[key]), f"Invalid {key}")
     require(re.fullmatch(r"[a-z][a-z0-9]{1,14}", c["bridge"]), "Invalid bridge name")
     require(c["pool_size"] == "200GiB", "Pool resizing requires a separate reviewed change")
+    overrides = c.get('instance_pools', {})
+    require(isinstance(overrides, dict), 'instance_pools must map box names to pools')
+    for name, pool in overrides.items():
+        box_name(name)
+        require(pool == 'hdd' and pool != c['pool'], 'Only explicit HDD migration overrides are supported')
     interface = ipaddress.IPv4Interface(c["bridge_address"])
     require(interface.network.prefixlen == 24 and interface.ip == interface.network.network_address + 1,
             "Use the first address of a private /24 bridge network")
@@ -367,7 +373,7 @@ def instance_spec(c, name):
             "source": {"type": "image", "fingerprint": PINS["image"]["fingerprint"]},
             "config": {"user.chart-infra": OWNER, "security.privileged": "false", "security.nesting": "true",
                        "security.idmap.isolated": "true", "security.idmap.size": "65536", "boot.autostart": "false"},
-            "devices": {"root": {"type": "disk", "path": "/", "pool": c["pool"]},
+            "devices": {"root": {"type": "disk", "path": "/", "pool": c.get('instance_pools', {}).get(name, c["pool"])},
                         "eth0": {"type": "nic", "network": c["bridge"], "name": "eth0", "security.port_isolation": "true"},
                         "tun": {"type": "unix-char", "source": "/dev/net/tun", "path": "/dev/net/tun"},
                         "data": {"type": "disk", "source": str(Path(c["boxes_root"]) / name),

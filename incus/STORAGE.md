@@ -132,6 +132,65 @@ operations need their own acceptance during a reversible migration.
 
 ## Migration boundary
 
+### Cross-pool fixture
+
+Before a personal-box move, verify both transfer directions with an isolated
+fixture and a synthetic idmapped HDD attachment:
+
+```sh
+sudo python3 incus/storage_move.py verify --config "$CHART_HOST_CONFIG" \
+  --trial <unique-trial-id> --image "$CHART_IMAGE" --apply
+```
+
+This starts an unenrolled bare fixture on the registered source pool, applies the
+syslog mitigation, and verifies files owned by guest UID 0 and UID 1000 on both
+rootfs and attached HDD storage. It moves the stopped fixture to `hdd`, back to
+the source pool, and finally to `hdd`. Each boot checks file content, ownership,
+modes, UID/GID maps and nested Docker execution. No developer files are attached.
+The stopped fixture and synthetic data remain after success; failures retain
+their phase and actual instance state without forced cleanup.
+
+Evidence is `/var/lib/chart-incus/storage-moves/<trial>/verify.json`; synthetic
+data is `<hdd_mount>/shared-dev/storage-fixtures/<trial>`. A trial name or data
+collision refuses a rerun. This check proves the fixture transfer path, not
+application latency or a live deployment migration.
+
+Incus 6.0.5 implements a local pool move through a temporary copy. Copy creation
+can allocate another isolated UID range, replace the cloud-init instance ID and
+queue copy templates. Before boot, the helper restores the saved base/next UID
+mapping and boot metadata through the Incus API. It requires the original current
+and disk mappings to remain intact, checks other instances across all projects
+for overlapping UID/GID ranges, and rejects other configuration changes. No host
+file ownership rewrite or confinement change is performed. Coordinate with other
+host operators: the chart lock does not lock independent Incus clients.
+Each move retains a `move-<ordinal>-metadata.json` receipt beside `verify.json`.
+[Incus 6.0.5 local move implementation](https://github.com/lxc/incus/blob/v6.0.5/cmd/incusd/instance_post.go)
+
+For a trial whose first transfer completed but the identity check stopped it
+before boot, use the explicit fixture recovery command:
+
+```sh
+sudo python3 incus/storage_move.py resume-fixture --config "$CHART_HOST_CONFIG" \
+  --trial <failed-trial-id> --image "$CHART_IMAGE" --apply
+```
+
+Recovery requires the original failed-first-transfer receipt, exact stopped HDD
+fixture, unchanged data marker and original file hashes/maps. It preserves
+`verify.json`, writes `resume.json` plus `resume-<ordinal>-metadata.json`, and tests
+HDD→source-pool→HDD with file, mapping, Docker and graceful-stop checks. A partial
+recovery retains its receipt and refuses a blind retry. This command cannot
+target a personal developer box. A prepared recovery is not live acceptance.
+
+### Per-box placement
+
+The optional host-config field `instance_pools` explicitly maps migrated personal
+box names to `hdd`. Unlisted names use `pool`. The mapping changes the expected
+root device for lifecycle and backup ownership checks; it does not move an
+instance. Host checks require the owned `dir` pool at the registered HDD path.
+The installed backup-tool snapshot and both host-config copies must recognize the
+mapping at cutover. Do not edit this field before the corresponding stopped
+instance transfer is verified.
+
 A successful trial does not authorize a raw `mv` of mounted pool files. Incus
 supports moving a stopped instance to another pool with `incus move --storage`.
 A deployment migration must also preserve HDD attachments, numeric ownership,
