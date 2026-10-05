@@ -271,6 +271,28 @@ Give the laptop agent the box hostname, trusted SSH host-key fingerprint,
 An operator who needs box SSH requires an explicitly authorized public key;
 the developer's laptop key does not authorize another device.
 
+## Memory and storage budgets
+
+Creation sets `limits.memory=8GiB`, a hard memory ceiling without reserving RAM.
+No CPU cap is set. Applying this setting to an existing box is a live Incus
+configuration change; inspect its memory usage before reducing the ceiling.
+Ownership validation accepts retained boxes without a memory cap, so their backup
+and recovery remain available.
+
+Before capping an existing box, refresh `prep.py` and `host_common.py` in the
+root-owned `/var/lib/chart-incus/backup-tool/` snapshot from the tested checkout.
+The old validator rejects `limits.memory`. Hold `/run/lock/chart-incus-prep.lock`
+while updating the snapshot and box configuration to exclude scheduled backups.
+Verify `limits.memory` in the expanded Incus config and `/sys/fs/cgroup/memory.max`
+inside the running box (`8589934592` bytes for 8 GiB).
+
+The storage budget is 256 GiB per box across rootfs and the retained data
+attachment. It is a planning budget, not allocated capacity or an enforced quota.
+The HDD `dir` pool requires ext4/XFS project quotas for enforcement; the external
+data attachment needs its own quota accounting. Do not set a rootfs-only size and
+describe it as a combined box limit. Quota enablement requires a separate host
+storage procedure; do not repartition or format the disk.
+
 ## Backups
 
 Policy: **04:00 Asia/Kuala_Lumpur, seven days of completed nightly copies**. A backup

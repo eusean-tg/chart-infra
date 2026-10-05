@@ -41,7 +41,9 @@ flowchart TB
 
 System containers share the host kernel, with isolated UID/GID maps, root filesystems
 and SSH/Tailscale identities. Guest root is not host root; no host administration
-socket or kubeconfig is provided. No per-box CPU/memory reservation or cap is set.
+socket or kubeconfig is provided. New boxes have an 8 GiB memory ceiling; memory
+is consumed on demand, without a reservation. No CPU cap is set. Retained uncapped
+boxes remain supported for backup and recovery until an operator applies the cap.
 
 ## Image and application boundary
 

@@ -82,13 +82,17 @@ class BareBox(unittest.TestCase):
         spec['config']['user.chart-box'] = h.OWNER
         with patch.object(h, 'instance', return_value=spec):
             self.assertEqual(h.owned(c, target.name), spec)
+        uncapped = copy.deepcopy(spec)
+        del uncapped['config']['limits.memory']
+        with patch.object(h, 'instance', return_value=uncapped):
+            self.assertEqual(h.owned(c, target.name), uncapped)
         for kind in ('profile', 'mount', 'raw', 'security', 'limit', 'marker'):
             broken = copy.deepcopy(spec)
             if kind == 'profile': broken['profiles'] = ['default']
             if kind == 'mount': broken['devices']['data']['source'] = '/home/sean'
             if kind == 'raw': broken['config']['raw.lxc'] = 'lxc.apparmor.profile=unconfined'
             if kind == 'security': broken['config']['security.idmap.base'] = '100000'
-            if kind == 'limit': broken['config']['limits.memory'] = '8GiB'
+            if kind == 'limit': broken['config']['limits.memory'] = '16GiB'
             if kind == 'marker':
                 (target / '.chart-incus-box.json').write_text(json.dumps({**marker, 'name': 'other-box'}))
             with self.subTest(kind=kind), patch.object(h, 'instance', return_value=broken):

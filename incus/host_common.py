@@ -56,6 +56,9 @@ def owned(c, name):
     spec = p.instance_spec(c, name)
     p.require(obj['devices'] == spec['devices'] and obj['profiles'] == [], 'Foreign box devices/profiles')
     for k, v in spec['config'].items():
+        # Retained uncapped boxes must remain eligible for backup and recovery.
+        if k == 'limits.memory' and k not in obj['config']:
+            continue
         p.require(obj['config'].get(k) == v, 'Box configuration differs: ' + k)
     if 'user.chart-box' in obj['config']:
         p.require(obj['config']['user.chart-box'] == OWNER, 'Unexpected personal-box registration')

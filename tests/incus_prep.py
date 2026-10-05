@@ -95,14 +95,15 @@ class Guards(unittest.TestCase):
                 prep.resource("storage-pools", "ssd", {"driver": "btrfs", "config": {"user.chart-infra": prep.OWNER}})
             self.assertEqual(query.call_count, 1)
 
-    def test_box_has_no_inherited_access_or_autostart_or_limits(self):
+    def test_box_is_isolated_with_memory_ceiling_and_no_autostart(self):
         spec = prep.instance_spec(self.c, "developer-box")
         self.assertEqual(spec["profiles"], [])
         self.assertEqual(spec["config"]["security.privileged"], "false")
         self.assertEqual(spec["config"]["boot.autostart"], "false")
         self.assertEqual(spec["config"]["security.idmap.isolated"], "true")
         self.assertTrue(spec["devices"]["data"]["source"].endswith("/boxes/developer-box"))
-        self.assertNotIn("limits.memory", spec["config"])
+        self.assertEqual(spec["config"]["limits.memory"], "8GiB")
+        self.assertNotIn("limits.cpu", spec["config"])
         self.assertEqual(set(spec["devices"]), {"root", "eth0", "tun", "data"})
 
     def test_plan_does_not_apply(self):
