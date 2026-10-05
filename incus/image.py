@@ -197,6 +197,10 @@ def verify(a):
         for name in record['tests']:
             obj = h.owned(c, name)
             p.require(obj['config'].get('volatile.base_image') == record['fingerprint'], 'Wrong test image')
+            p.require(syslog_fix.guest(c, name, ['cat', syslog_fix.DROPIN]) == syslog_fix.CONTENT,
+                      'Image syslog drop-in differs')
+            syslog = json.loads(syslog_fix.guest(c, name, ['python3', '-c', syslog_fix.PROBE]))
+            p.require(syslog_fix.nonblocking(syslog), 'Image syslog descriptors are blocking')
             if name not in record.get('runtime_verified', []):
                 # No registry or application access is required for these OS checks.
                 h.guest(c, name, ['bash', '-ec', '. /etc/profile.d/chart-nvm.sh; test "$(nvm --version)" = 0.40.3; docker info >/dev/null; docker compose version; command -v git curl jq python3 gcc make; test -z "$(ls -A /srv/chart/source)"; test -z "$(docker image ls -q)"; test -z "$(docker ps -aq)"; test -z "$(docker volume ls -q)"; systemctl is-active chart-input.service; nft list table inet chart_input'])
@@ -215,7 +219,7 @@ def verify(a):
                 connection.close(); raise RuntimeError('SSH reachable over bridge')
             reports.append({'box': name, 'machine_id': h.guest(c, name, ['cat', '/etc/machine-id']).strip(),
                             'ssh_key': h.guest(c, name, ['ssh-keygen', '-lf', '/srv/chart/data/identity/ssh/ssh_host_ed25519_key.pub']).split()[1],
-                            'tailscale_id': ts['Self']['ID'], 'ip': ip})
+                            'tailscale_id': ts['Self']['ID'], 'ip': ip, 'syslog': syslog})
         for key in ('machine_id', 'ssh_key', 'tailscale_id', 'ip'):
             p.require(reports[0][key] != reports[1][key], 'Duplicated identity: ' + key)
         # No automatic default-image alias: operators create from the recorded verified fingerprint.

@@ -205,6 +205,8 @@ Acceptance checks nvm/tool availability, an offline scratch Docker build/run,
 empty source and service-image stores before that test, active guest firewall,
 Tailscale SSH reachability, bridge SSH denial and distinct machine/SSH/Tailscale
 identities. It records a verified fingerprint. Test boxes and fixtures remain.
+Both test boxes must contain the exact rsyslog `NonBlocking=yes` drop-in and show
+nonblocking syslog descriptors in PID 1 and rsyslog; the receipt records those flags.
 Application tests, repository secret scanning and seeded-source promotion are not
 part of image acceptance. A failed check records no verified image; inspect the
 retained build.

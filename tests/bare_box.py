@@ -247,8 +247,26 @@ class BareBox(unittest.TestCase):
         with patch.object(image.p, 'STATE', self.root), patch.object(image.p, 'config', return_value={}), \
              patch.object(image.p, 'check_host'), patch.object(image.p, 'locked', contextlib.nullcontext), \
              patch.object(h, 'host'), patch.object(h, 'candidate'), \
-             patch.object(h, 'owned', return_value={'config': {'volatile.base_image': 'fp'}}), patch.object(h, 'guest', side_effect=guest):
+             patch.object(h, 'owned', return_value={'config': {'volatile.base_image': 'fp'}}), patch.object(h, 'guest', side_effect=guest), \
+             patch.object(image.syslog_fix, 'guest', side_effect=[image.syslog_fix.CONTENT,
+                          json.dumps({'flags': {'systemd': [2048], 'rsyslog': [2048]}})]):
             with self.assertRaisesRegex(RuntimeError, 'generic gate failed'):
+                image.verify(SimpleNamespace(config='fixture', build='test', apply=True))
+        self.assertEqual(json.loads(path.read_text()), record)
+
+    def test_syslog_gate_refuses_blocking_reader_without_accepting_image(self):
+        from types import SimpleNamespace
+        directory = self.root / 'bare-images/test'; directory.mkdir(parents=True)
+        record = {'owner': h.OWNER, 'phase': 'acceptance-pending', 'fingerprint': 'fp', 'tests': ['test-a', 'test-b']}
+        path = directory / 'build.json'; path.write_text(json.dumps(record))
+        with patch.object(image.p, 'STATE', self.root), patch.object(image.p, 'config', return_value={}), \
+             patch.object(image.p, 'check_host'), patch.object(image.p, 'locked', contextlib.nullcontext), \
+             patch.object(h, 'host'), patch.object(h, 'candidate'), \
+             patch.object(h, 'owned', return_value={'config': {'volatile.base_image': 'fp'}}), \
+             patch.object(h, 'guest', return_value=json.dumps({'BackendState': 'Running'})), \
+             patch.object(image.syslog_fix, 'guest', side_effect=[image.syslog_fix.CONTENT,
+                          json.dumps({'flags': {'systemd': [0], 'rsyslog': [2048]}})]):
+            with self.assertRaisesRegex(RuntimeError, 'descriptors are blocking'):
                 image.verify(SimpleNamespace(config='fixture', build='test', apply=True))
         self.assertEqual(json.loads(path.read_text()), record)
 

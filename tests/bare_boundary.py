@@ -23,9 +23,11 @@ class Boundary(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
 
-    def archive(self, extra=None, machine=b''):
+    def archive(self, extra=None, machine=b'', syslog=True):
         path = self.root / 'image.tar'
         entries = {'rootfs/etc/machine-id': machine, 'rootfs/var/lib/chart-bare-image': b'chart-bare-v1\n'}
+        if syslog:
+            entries['rootfs' + a.syslog_fix.DROPIN] = a.syslog_fix.CONTENT.encode()
         entries.update(extra or {})
         with tarfile.open(path, 'w') as tar:
             directory = tarfile.TarInfo('rootfs/srv/chart/source'); directory.type = tarfile.DIRTYPE
@@ -42,6 +44,12 @@ class Boundary(unittest.TestCase):
     def test_rejects_nonempty_machine_id(self):
         path = self.archive(machine=b'copied-id')
         with self.assertRaisesRegex(RuntimeError, 'marker content'): a.inspect(path, a.p.digest(path))
+
+    def test_rejects_missing_or_disabled_syslog_fix(self):
+        path = self.archive(syslog=False)
+        with self.assertRaises(RuntimeError): a.inspect(path, a.p.digest(path))
+        path = self.archive({'rootfs' + a.syslog_fix.DROPIN: b'[Service]\nNonBlocking=no\n'})
+        with self.assertRaises(RuntimeError): a.inspect(path, a.p.digest(path))
 
     def test_rejects_identity_source_and_provisioning_leftovers(self):
         for name in ('rootfs/etc/ssh/ssh_host_ed25519_key', 'rootfs/root/.ssh/authorized_keys',

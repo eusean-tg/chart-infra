@@ -2,11 +2,13 @@
 from pathlib import PurePosixPath
 import tarfile
 import prep as p
+import syslog_fix
 
 
 def inspect(path, fingerprint):
     p.require(p.digest(path) == fingerprint, 'Export checksum differs from the published image fingerprint')
-    required = {'rootfs/etc/machine-id': b'', 'rootfs/var/lib/chart-bare-image': b'chart-bare-v1\n'}
+    required = {'rootfs/etc/machine-id': b'', 'rootfs/var/lib/chart-bare-image': b'chart-bare-v1\n',
+                'rootfs' + syslog_fix.DROPIN: syslog_fix.CONTENT.encode()}
     forbidden = ('rootfs/root/chart-prep', 'rootfs/var/lib/chart-bare-builder',
                  'rootfs/root/.ssh/authorized_keys', 'rootfs/root/.bash_history',
                  'rootfs/root/.npmrc', 'rootfs/root/.netrc',
@@ -29,4 +31,5 @@ def inspect(path, fingerprint):
                 found.add(name)
     p.require(found == set(required) and source, 'Image lacks expected bare-rootfs markers')
     return {'sha256': fingerprint, 'machine_id': 'empty', 'ssh_host_keys': 'absent',
-            'provisioning_and_identity_artifacts': 'absent', 'source': 'empty', 'extracted': False}
+            'provisioning_and_identity_artifacts': 'absent', 'source': 'empty', 'extracted': False,
+            'syslog_dropin': 'NonBlocking=yes'}
