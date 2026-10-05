@@ -1,30 +1,22 @@
-# Incus preparation
+# Host, image and box operations
 
-This directory supplies the host foundation and generic Ubuntu 26.04 personal
-boxes. The infrastructure owns OS provisioning, Tailscale/SSH connectivity,
-source transport and HDD backups. Developers own all applications inside their
-unprivileged boxes and have root there. Their agents work from laptops.
+Host operators use this guide for preparation, images, personal-box lifecycle
+and backups. Commands run from the repository root. Read [architecture](ARCHITECTURE.md)
+for storage/access boundaries and [developer setup](DEVELOPER.md) for applications.
+Establish the host, configuration and exact target before applying a mutation.
 
-Read [Bare images and lifecycle](IMAGES.md) for image build, two-instance
-acceptance, box creation/recreation and backups. Read [Developer-agent setup](DEVELOPER.md)
-for repositories, Mutagen pairing, private configuration and daily use. The
-[chart-box skill](../skills/chart-box/SKILL.md) guides laptop agents during remote
-work.
+- [Host preparation](#inspect-and-select-the-host)
+- [Pool registration](#pool-registration)
+- [Image build and acceptance](#build-and-accept-a-generic-image)
+- [Box creation](#create-a-developer-box) and [enrollment](#enrollment-and-developer-handoff)
+- [Backups](#backups), [recovery test](#test-image-recovery) and [network acceptance](#published-artifact-network-boundaries-and-test-retirement)
+- [Recreation](#recreate-while-retaining-identity-and-data)
+- [Capacity checks](#capacity-and-operator-checks)
 
-`prep.py` prepares the host and checks storage/network identity. Box creation
-uses `boxes.py` with an explicitly verified bare-image fingerprint.
-Host mutations need operator sudo; developers receive only box-root SSH.
-No CPU/memory caps or reservations are configured. Instances use
-`boot.autostart=false`. Stopping retains their files; application startup inside
-a running personal box belongs to its developer.
+Host mutations require operator sudo. Review the plan before `--apply`; preserve
+unrelated host services, data and synchronization sessions.
 
-No image command fetches repositories, selects backend versions, installs npm
-packages, scans repository secrets or enforces application egress. Personal boxes
-have normal public-network egress subject to the host boundary below. Shared k3s
-capture restrictions remain independent. No existing pilot, data or sync session
-is automatically migrated or retired.
-
-## 1. Inspect and select the host
+## Inspect and select the host
 
 Run from the chart-infra checkout:
 
@@ -48,12 +40,12 @@ CHART_ARTIFACTS=/absolute/cache/path/incus-artifacts
 python3 incus/prep.py host-prepare --config "$CHART_HOST_CONFIG"
 ```
 
-Before applying, record unrelated workload health, Pod and PV/PVC identities and
-existing endpoint reachability. Privileged preparation saves the original host
+Before applying, record unrelated workload health, storage identities and
+endpoint reachability. Privileged preparation saves the original host
 firewall, routes and package inventory under `/var/lib/chart-incus/`. These files
 are root-only. The tool does not read Kubernetes Secrets or developer tokens.
 
-## 2. Fetch artifacts and prepare the host
+## Prepare the host
 
 ```sh
 python3 incus/prep.py fetch --artifacts "$CHART_ARTIFACTS"
@@ -125,51 +117,142 @@ conflicting LAN/sysctl configuration. No host or box reboot is required. Verify
 the effective values with `sysctl fs.inotify.max_user_instances
 fs.inotify.max_user_watches` on both host and box after applying.
 
-## 3. Build the bare image and create boxes
+## Pool registration
 
-Follow [IMAGES.md](IMAGES.md). The generic builder uses the verified Ubuntu and
-Tailscale artifacts above plus pinned nvm/tooling inputs. It publishes a private
-candidate and creates two test instances with independent HDD/SSH/Tailscale
-identities. Acceptance yields an immutable fingerprint for `boxes.py create`.
-No application stack or source seed is included.
+Host configuration selects a default `pool`. Optional `instance_pools` entries
+select `hdd` for individual names; unlisted names use the default. For example:
 
-Provisioning uses the developer's selected public key and the host timezone.
-Enrollment uses that developer's account in the existing team tailnet. Retained
-data without a matching instance is refused by ordinary creation; planned
-recreation uses explicit backup, old-rootfs retention and HDD identity adoption.
+```json
+{
+  "pool": "ssd",
+  "instance_pools": {"alex-dev": "hdd"}
+}
+```
 
-| Inside the box | Storage |
-| --- | --- |
-| `/srv/chart/source/<repo>` | Source mirror in the registered root pool |
-| nvm, node_modules, package caches, Docker data | Registered root pool |
-| `/srv/chart/data` | Required retained per-box HDD attachment |
-| `/srv/chart/data/identity` | Retained SSH host keys and Tailscale state |
-| Host `/var/backups/chart-incus/boxes/<stamp>/<box>` on NVMe | Nightly HDD copies and explicit rootfs exports |
+This is a fragment of the host configuration, not a complete configuration file.
+The preparation template creates a 200 GiB SSD btrfs pool. Per-box HDD placement
+requires an existing owned `dir` pool named `hdd`, with source
+`<hdd_mount>/shared-dev/incus` on the registered HDD. Host checks validate its
+ownership marker, path and filesystem. Creating a pool does not change placement.
 
-APT upgrades remain explicit. Guest package timers are disabled. Incus preparation
-never recursively rewrites host HDD ownership. Check idmapped access and retained
-identity before treating recreation as accepted.
+Both operator and installed host configurations, and the installed backup-tool
+snapshot, must recognize the selected placement. The mapping controls creation
+and ownership checks; editing it does not move an existing instance. Coordinate
+placement changes with the operator and exclude concurrent lifecycle/backup work.
+Do not relocate mounted pool directories with filesystem commands.
 
-## 4. Prove the foundation before enrollment and apps
+## Image contents and preparation
 
-Use `sudo incus exec local:<box> --project chart-dev -- <command>` for privileged
-bootstrap checks. The host cannot SSH to the box's bridge address by design.
+The image contains Ubuntu 26.04, Docker/Compose, SSH, unenrolled Tailscale, the
+guest input firewall, native build tools, Python, Git, curl, jq and nvm 0.40.3.
+There is no Node version selected, repository content, service image, app CLI,
+application configuration or registry token. Developers configure their boxes
+using [the developer guide](DEVELOPER.md) and their repositories' instructions.
 
-1. Inspect host firewall order/counters and bridge port isolation. Compare
-   unrelated service/volume identities with the preservation baseline.
-2. Verify Ubuntu release, unique machine-id, isolated UID map, TUN, HDD UUID,
-   the real data mount and idmapped writes. Record exact package versions and
-   Docker/containerd storage paths. Recheck after stop/start; no existing data
-   path is a test fixture.
-3. Follow [image acceptance](IMAGES.md) for Docker execution, published-port
-   access and retained-storage recovery checks on the disposable test boxes.
-   A successful `docker info` alone does not prove nested runtime compatibility.
-   Add syscall interception only if a concrete failure demonstrates the need.
-4. Test host/bridge ingress denial and box underlay denial to host management,
-   k3s, LAN and VPN networks, while public package access succeeds. Verify after
-   coordinated Docker/Incus restarts; do not restart unrelated workloads just
-   to run acceptance. A workstation reboot needs a separate agreed window.
-5. Enroll the box interactively with `tailscale up --hostname=<box>
+Image preparation retains rsyslog with a `NonBlocking=yes` service drop-in at
+`/etc/systemd/system/rsyslog.service.d/chart-nonblocking.conf`. The builder's
+rsyslog is terminated through a validated host PID descriptor and started again
+before package operations. Preparation verifies both syslog readers have
+nonblocking descriptors and checks log delivery; evidence is `syslog.json` in
+the build directory. This mitigates the systemd socket-flush shutdown hang while
+preserving `/var/log/syslog`. It does not change host AppArmor policy.
+Images published before this preparation step require separate mitigation or
+replacement; editing the builder does not modify an existing image.
+
+## Build and accept a generic image
+
+Use a clean committed checkout. Set explicit absolute paths outside it:
+
+```sh
+CHART_HOST_CONFIG=/absolute/private/path/host.json
+CHART_ARTIFACTS=/absolute/cache/path/incus-artifacts
+CHART_NVM_ARTIFACTS=/absolute/cache/path/bare-artifacts
+CHART_OPERATOR_KEY=/absolute/path/operator-public-key.pub
+CHART_BUILD=bare-example
+
+python3 incus/prep.py fetch --artifacts "$CHART_ARTIFACTS"
+python3 incus/image.py fetch --nvm-artifacts "$CHART_NVM_ARTIFACTS"
+python3 incus/image.py image-build --config "$CHART_HOST_CONFIG" \
+  --build "$CHART_BUILD" --artifacts "$CHART_ARTIFACTS" \
+  --nvm-artifacts "$CHART_NVM_ARTIFACTS" --ssh-key "$CHART_OPERATOR_KEY"
+sudo python3 incus/image.py image-build --config "$CHART_HOST_CONFIG" \
+  --build "$CHART_BUILD" --artifacts "$CHART_ARTIFACTS" \
+  --nvm-artifacts "$CHART_NVM_ARTIFACTS" --ssh-key "$CHART_OPERATOR_KEY" --apply
+```
+
+`versions.lock.json` pins the base, Docker/Compose, SSH, networking and Tailscale.
+`bare.lock.json` pins generic build tools and checksummed nvm scripts. These are
+infrastructure versions, not backend source pins. Transitive packages are recorded
+in the build inventory; APT repositories are not frozen snapshots.
+
+The builder has no HDD attachment, developer identity or TUN device. Its package
+setup masks SSH/Tailscale, installs the guest firewall, verifies empty application
+source and Docker stores, then sanitizes OS identities before stopped-instance
+publication. Images are local/private. Build inputs, package versions, helper
+revision and candidate fingerprint stay under `/var/lib/chart-incus/bare-images/`.
+No default alias or automatic update mechanism is used.
+
+Two test boxes receive separate HDD directories, isolated UID maps, fresh SSH
+host keys and the operator's public login key. The build prints their enrollment
+commands. Enroll both into the existing tailnet, then run:
+
+```sh
+sudo python3 incus/image.py image-verify --config "$CHART_HOST_CONFIG" \
+  --build "$CHART_BUILD" --apply
+```
+
+Acceptance checks nvm/tool availability, an offline scratch Docker build/run,
+empty source and service-image stores before that test, active guest firewall,
+Tailscale SSH reachability, bridge SSH denial and distinct machine/SSH/Tailscale
+identities. It records a verified fingerprint. Test boxes and fixtures remain.
+Application tests, repository secret scanning and seeded-source promotion are not
+part of image acceptance. A failed check records no verified image; inspect the
+retained build.
+
+Guest provisioning waits up to 90 seconds for systemd and D-Bus. Incus can report
+a started container before those services can handle `timedatectl` or `systemctl`.
+If publication succeeded but test-box provisioning stopped, resume that build:
+
+```sh
+sudo python3 incus/image.py image-resume --config "$CHART_HOST_CONFIG" \
+  --build "$CHART_BUILD" --apply
+```
+
+Resume validates the recorded candidate, instance ownership and original script
+snapshot. It provisions an existing test box only if its HDD identity directory
+is absent, preserves completed identities, and creates missing test boxes. A
+partial identity, changed image or changed script snapshot requires inspection;
+the command does not erase or regenerate it. No image is rebuilt or accepted by
+resume. It prints the enrollment commands; use `image-verify` after enrollment.
+Failures before publication require diagnosis and a separate build name.
+
+## Create a developer box
+
+Use the verified fingerprint from `image-verify`, not a moving alias:
+
+```sh
+sudo python3 incus/boxes.py create --config "$CHART_HOST_CONFIG" \
+  --box alex-dev --image <verified-fingerprint> \
+  --ssh-key /absolute/path/alex-public-key.pub --apply
+```
+
+The command creates/provisions an unprivileged box, attaches its required HDD
+root at `/srv/chart/data`, and inherits the host timezone. Creation refuses any
+existing instance or retained HDD directory. No application is installed or
+started. Enroll the box using the printed command and the developer's own account
+in the team tailnet. No auth key belongs in the script or repository.
+
+Repeat `--ssh-key /absolute/path/device.pub` for each authorized laptop/operator
+device. Each file must contain one OpenSSH public key; duplicate keys are removed.
+Only public keys are copied. Recreation retains the box's authorized-key set.
+
+Give the laptop agent the box name, SSH host-key fingerprint and developer guide.
+Verify both operator/laptop `tailscale ping` and SSH; confirm intended teammate
+API access separately against tailnet ACLs. Host Incus access stays with operators.
+
+## Enrollment and developer handoff
+
+1. Enroll the box interactively with `tailscale up --hostname=<box>
    --accept-routes=false --accept-dns=true --ssh=false`. Use the local operator
    console; do not put auth keys in scripts, Git, logs or chat. Confirm assigned
    IP/name, tailnet peer policy and reconnection. Do not advertise routes, an
@@ -178,56 +261,227 @@ bootstrap checks. The host cannot SSH to the box's bridge address by design.
    team tailnet. User ownership and peer network access are separate: verify the
    tailnet policy permits intended teammate APIs and operator access. Centrally
    managed tagged boxes require a separate tailnet-admin policy decision.
-6. From the laptop, verify the SSH host-key fingerprint through the host
+2. From the laptop, verify the SSH host-key fingerprint through the host
    operator, then connect as `root@<box>`. This is root inside the unprivileged
    box. Do not disable host-key checking. Verify service access from a teammate
    during application acceptance; successful enrollment is not that proof.
 
-## Mutagen handoff
+Give the laptop agent the box hostname, trusted SSH host-key fingerprint,
+[developer guide](DEVELOPER.md) and `skills/chart-box/` with its helper scripts.
+An operator who needs box SSH requires an explicitly authorized public key;
+the developer's laptop key does not authorize another device.
 
-Give the laptop agent the box name, trusted SSH host-key fingerprint,
-[developer guide](DEVELOPER.md), and `skills/chart-box/` with its helper scripts.
-Discover checkout paths; pairing uses root SSH and `/srv/chart/source/<repo>`.
-There is no daemon in the box beyond Mutagen's SSH-started agent, no Syncthing
-pairing, and no application-side activation helper.
+## Backups
 
-The helper records owned sessions and Git-tracked private-pattern exceptions in
-`~/.config/chart-box/box.json`. It checks overlaps, flushes and verifies content,
-and provides explicit policy refresh. Select the developer's recorded mapping
-with `--config` on every invocation. Preserve unrelated sessions.
-An operator who needs box SSH must have an explicitly authorized public key;
-the developer's laptop key does not authorize the PC agent.
+Policy: **04:00 Asia/Kuala_Lumpur, seven days of completed nightly copies**. A backup
+stops one box gracefully, copies its HDD directory, then restores its prior box
+running/stopped state. There is no forced stop. Apps return only according to the
+developer's startup configuration; a process launched manually does not restart
+because the box does. Failed copies retain partial artifacts and attempt to restart
+an originally running box. Failure is visible in the systemd service journal.
 
-## Capacity and retention
+Backups live under `/var/backups/chart-incus/boxes/<UTC timestamp>/<box>/` on the
+host root SSD/NVMe filesystem, separate from the HDD source. An off-machine copy is
+needed for loss of the whole PC. Rootfs source,
+node_modules, `/root/.npmrc` and arbitrary files outside `/srv/chart/data` are not
+included in nightly copies. Place irreplaceable private config under HDD or export
+it separately. A stopped copy prevents concurrent guest writes; applications must
+still support recovery from their shutdown state. Developers can keep logical
+database dumps under `/srv/chart/data/backups/` for application-level restores.
 
-Run `status` after image/package preparation, dependency installs, snapshots or
-new boxes. Record pool consumption, btrfs data/metadata allocation, host SSD
-free space, and later per-box `docker system df -v` and pnpm-store usage.
-Investigate at 70% pool usage, below 25% host SSD free, or unexpected growth at
-any level. Pause optional heavy work at 85% pool usage or earlier btrfs
-allocation pressure. Preparation is conservative and refuses at the review
-threshold. There is no background monitoring or automatic cleanup.
+Destination checks require the host root filesystem and a device distinct from
+the HDD. Copies preserve 25% free space plus a 1 GiB margin. The data archive uses
+an apparent-size estimate; each archive writer receives a file-size ceiling based
+on available space. Scratch restore checks the uncompressed archive size. These
+checks do not reserve space against concurrent workstation writes. Capacity/copy
+failures retain incomplete artifacts; an ordinary backup restarts a box it stopped.
+Monitor both filesystem usage and retained manual exports/scratch directories.
 
-An Incus snapshot excludes the attached HDD data. The scheduled HDD copy stops the box; application-aware dumps are a developer
-choice. Restoring a rootfs snapshot requires coordinated source sync and review
-of the developer's application/data compatibility. Never clone enrolled identities into
-another running box. Stop retains all data; deletion requires an explicit named
-target. Existing k3s data and historical Mongo/DNS pilots are outside these
-commands.
+Each nightly directory contains `data.tar` and `backup.json`. Manual backups
+with `--rootfs` also include `rootfs.tar.gz`. Scratch restores belong under
+`/var/backups/chart-incus/restore-checks/`. See the [coverage table](ARCHITECTURE.md#backup-coverage)
+for which files require a separate rootfs or host backup.
 
-## Development checks
+Prove a manual copy and restore on a test box before enabling the timer:
 
 ```sh
-python3 tests/incus_prep.py
-python3 tests/bare_box.py
-python3 tests/bare_boundary.py
-python3 tests/syslog.py
-bash -n incus/bare-base.sh incus/bare-identity.sh incus/guest-firewall.sh
+sudo python3 incus/backup.py backup --config "$CHART_HOST_CONFIG" \
+  --box <test-box> --apply
+sudo python3 incus/backup.py restore-check --config "$CHART_HOST_CONFIG" \
+  --backup /var/backups/chart-incus/boxes/<stamp>/<test-box> \
+  --scratch /var/backups/chart-incus/restore-checks/<unique-name> --apply
+sudo python3 incus/backup.py enroll --config "$CHART_HOST_CONFIG" \
+  --box <accepted-personal-box> --apply
+sudo python3 incus/backup.py install-timer --config "$CHART_HOST_CONFIG" --apply
 ```
 
-These are offline checks, not live deployment acceptance. Incus 6.0.5 API/CLI
-contracts are checked against its [tagged source](https://github.com/lxc/incus/tree/v6.0.5).
-Storage and firewall behavior follow the official
-[btrfs](https://linuxcontainers.org/incus/docs/main/reference/storage_btrfs/) and
-[firewall coexistence](https://linuxcontainers.org/incus/docs/main/howto/network_bridge_firewalld/)
-references. Validate them on the pinned host before accepting the host and image.
+`restore-check` verifies the archive checksum, extracts into a new scratch directory
+and compares file contents/links. It preserves numeric ownership, rejects escaping
+links/devices, starts no service and never overwrites a live dataset. Archives
+retain GNU tar ACL/xattr metadata; this scratch check validates content/links, not
+a full ACL/xattr round trip. Inspect filesystem-specific restore needs before live
+recovery. An archive with an external symlink is retained but needs a separately
+reviewed restore method; automatic scratch extraction refuses it.
+
+The timer operates only on explicitly enrolled personal boxes with their expected
+HDD devices, markers and `user.chart-box=chart-bare-v1`. Enrollment lives in
+`/var/lib/chart-incus/backup-enrollment.json`. No box is enrolled by creation.
+`chart-test-*`, `chart-bare-*` and `retained-*` cannot enroll;
+manual backup remains available. `unenroll --box <name> --apply` removes a box
+from the schedule without stopping it or removing copies. Installation requires
+at least one enrolled box. The timer runs from a root-owned tool snapshot under
+`/var/lib/chart-incus/backup-tool/`. Updating the checkout does not update that
+snapshot; review and install changes explicitly without changing enrollment.
+Missed schedules do not trigger daytime catch-up (`Persistent=false`). Pruning
+covers only completed nightly HDD-only generations older than seven days with a
+newer completed copy. Manual backups, rootfs exports and incomplete generations
+are retained. A failed nightly run skips pruning. Monitor HDD/SSD space and inspect
+`systemctl status chart-box-backup.timer` and `journalctl -u chart-box-backup.service`.
+
+To run the installed nightly service immediately and inspect its result:
+
+```sh
+sudo systemctl start chart-box-backup.service
+systemctl show chart-box-backup.service -p Result -p ExecMainStatus
+journalctl -u chart-box-backup.service --no-pager -n 40
+```
+
+The start command waits for completion and can produce no output on success.
+Check actual application readiness after the box returns. A manual trigger of
+this service still creates nightly-policy generations and leaves the timer intact.
+
+## Test image recovery
+
+An opt-in host fixture reuses test box A from a verified image build:
+
+```sh
+python3 tests/bare_recovery_live.py --config "$CHART_HOST_CONFIG" --build "$CHART_BUILD"
+sudo python3 tests/bare_recovery_live.py --config "$CHART_HOST_CONFIG" \
+  --build "$CHART_BUILD" --apply
+```
+
+It creates unique synthetic root/UID-1000 files on that box's HDD, runs recreation
+with NVMe backup/rootfs export/scratch restore, and checks file hashes, guest
+ownership/modes, SSH identity and Tailscale node identity. It enrolls no additional
+Tailscale device. Evidence is `/var/lib/chart-incus/recovery-proofs/<build>/proof.json`.
+The previous rootfs remains stopped without its HDD attachment. A partial proof
+requires inspection of that receipt and the recreation phase; do not rerun blindly.
+
+After acceptance and before handing a box to a developer, retire disposable image
+test instances and remove their corresponding Tailscale device registrations using
+an authorized account. Stopping a box alone does not remove its registration.
+Preserve HDD directories, archives and evidence unless their deletion is explicitly
+authorized. When replacing a working environment, preserve it until the replacement's
+application, sync and data acceptance pass. No cleanup is performed by this fixture.
+
+## Published artifact, network boundaries and test retirement
+
+After recovery passes, use the retained pair for final image/network checks:
+
+```sh
+python3 tests/bare_boundary_live.py --config "$CHART_HOST_CONFIG" \
+  --build "$CHART_BUILD" --retire-tests
+sudo python3 tests/bare_boundary_live.py --config "$CHART_HOST_CONFIG" \
+  --build "$CHART_BUILD" --retire-tests --apply
+```
+
+The command requires the matching verified image and completed recovery receipt.
+It exports the published image and verifies the unified tarball's SHA-256 against
+the fingerprint. Inspection streams the archive without extraction or booting:
+machine-id must be empty, the bare-image marker must match, source must be empty,
+and SSH host keys, authorized keys, Tailscale state, root npm/netrc credentials,
+shell history and provisioning directories must be absent. It checks these named
+infrastructure artifacts, not arbitrary application files for secret content.
+The archive layout and identifier follow the
+[Incus image format](https://linuxcontainers.org/incus/docs/main/reference/image_format/).
+
+An offline-compiled static TCP fixture runs in a scratch Docker image on each test
+box, publishing IPv4 port 38081 on all box addresses. No registry image is pulled.
+Positive controls prove local and host/peer Tailscale access. Negative probes check
+host-to-box and peer-to-peer bridge access; a temporary host listener tests
+box-to-host bridge denial. Existing firewall rules are recorded, not modified.
+These probes do not packet-test forwarding to a separate physical LAN machine or
+k3s destination, IPv6 service publication, or laptop browser access. Named fixture
+containers are removed after the checks; source and fixture images are retained.
+
+`--retire-tests` performs cleanup only after every check passes. Each test box gets
+a stopped HDD backup and rootfs export. The command logs it out of Tailscale, stops
+it gracefully, detaches its HDD device, and deletes only that test instance.
+HDD directories, images, archives, proof receipts and the stopped rootfs retained
+by the recovery test remain. Only the recorded test pair is selected. Omitting the flag
+runs checks without instance retirement.
+
+Evidence and per-instance retirement phases live under
+`/var/lib/chart-incus/boundary-proofs/<build>/`. An existing proof directory refuses
+blind reruns; inspect failed/partial state before recovery.
+
+Tailnet inventory removal is separate from local instance deletion/logout. The
+command prints the exact test names and node IDs for removal by a tailnet Owner,
+Admin or IT admin through the console or API. Until that removal is confirmed,
+device cleanup is incomplete. See
+[Tailscale device removal](https://tailscale.com/docs/features/access-control/device-management/how-to/remove).
+
+## Recreate while retaining identity and data
+
+Coordinate a pause of every laptop session targeting the box. The operator then
+reviews the plan before applying:
+
+```sh
+python3 incus/boxes.py recreate --config "$CHART_HOST_CONFIG" \
+  --box <box> --image <verified-fingerprint> --sync-paused
+sudo python3 incus/boxes.py recreate --config "$CHART_HOST_CONFIG" \
+  --box <box> --image <verified-fingerprint> --sync-paused --apply
+```
+
+The flag attests to coordination; the host cannot prove a laptop session is paused.
+The command captures authorized keys, SSH fingerprints and Tailscale node identity,
+stops the box, exports its rootfs and separately copies HDD data, and proves a
+scratch restore. It detaches the HDD from the old stopped instance and renames
+that instance to `retained-<id>`. The replacement gets the verified bare image and
+the existing required HDD attachment. Provisioning reuses SSH host keys and
+Tailscale state; it does not generate replacements for missing retained identity.
+Recreation compares those identities before reporting success.
+
+The old instance, independent rootfs export, data backup and scratch restore
+remain. Existing source/dependencies/config in the old rootfs do not populate the
+replacement automatically. The laptop agent reconciles its paused sessions to
+empty mirrors, reinstalls dependencies and restores its private configuration.
+No application dataset is selected, migrated, cleared or initialized by recreation.
+
+Failure leaves a phase record under `/var/lib/chart-incus/recreations/`; do not
+rerun blindly, start the retained instance or attach the same HDD to both. Inspect
+the record, old instance/device state and verified backups. Recovery is an operator
+procedure: keep both instances stopped, select one rootfs, attach the original HDD
+only to that instance, verify idmapping/host keys, and start only that copy. Never
+run two copies of an enrolled identity. Automated rollback and arbitrary recovery
+from a deleted instance are outside this command.
+
+## Capacity and operator checks
+
+```sh
+sudo python3 incus/prep.py status --config "$CHART_HOST_CONFIG"
+systemctl status chart-box-backup.timer
+```
+
+Inspect pool usage, btrfs data/metadata allocation and host free space after
+image builds, dependency installs, snapshots and new boxes. Use guest
+`docker system df -v` and the selected package manager's store path to locate growth.
+Review at 70% pool/HDD usage, below 25% host SSD free, or unexpected growth.
+Pause optional heavy work at 85% or earlier btrfs allocation pressure; keep at
+least 10 GiB HDD free. Backup checks require 25% host-root free plus 1 GiB.
+No background monitor or cleanup job enforces the review thresholds.
+
+Provisioning inherits host timezone and sets `boot.autostart=false`. A host reboot
+does not start every box. APT upgrades are explicit; guest package timers are
+disabled. Starting a box restores its infrastructure services; developers configure
+application startup. Do not recursively rewrite HDD ownership to repair idmapping.
+
+For bootstrap checks use `sudo incus exec local:<box> --project <project> -- <command>`;
+the host cannot SSH to a bridge address by design. Check mounts, UID maps, runtime
+versions and service boundaries on disposable fixtures. Never use existing data
+as a fixture or restart unrelated workloads for acceptance.
+
+Offline checks are listed in the [repository README](../README.md#development-checks).
+Incus contracts follow the [6.0.5 source](https://github.com/lxc/incus/tree/v6.0.5),
+[btrfs driver](https://linuxcontainers.org/incus/docs/main/reference/storage_btrfs/)
+and [firewall coexistence](https://linuxcontainers.org/incus/docs/main/howto/network_bridge_firewalld/).

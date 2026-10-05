@@ -25,7 +25,7 @@ ssh root@<box>
 Do not disable host-key checking. The box is a separate Tailscale node; confirm
 `tailscale ping <box>` from the laptop. Operator tasks require host sudo; developer
 work requires only box SSH. Guest root has no host Incus or Kubernetes authority.
-The guest inherits host timezone (`Asia/Kuala_Lumpur` on Sean's PC).
+The guest inherits host timezone.
 
 Obtain the reviewed `skills/chart-box/` directory from chart-infra, including its
 scripts and this guide. Keep a local chart-infra checkout or an equivalent bundle
@@ -51,19 +51,22 @@ For each Git checkout, choose a unique destination name. Any repository is allow
 
 ```sh
 python3 /absolute/chart-infra/skills/chart-box/scripts/sync.py setup \
+  --config /absolute/laptop/box.json \
   --box <box> --repo orange-v2-backend --source /absolute/laptop/checkout
-python3 /absolute/chart-infra/skills/chart-box/scripts/sync.py resume --repo orange-v2-backend
-python3 /absolute/chart-infra/skills/chart-box/scripts/sync.py flush --repo orange-v2-backend
+python3 /absolute/chart-infra/skills/chart-box/scripts/sync.py resume \
+  --config /absolute/laptop/box.json --repo orange-v2-backend
+python3 /absolute/chart-infra/skills/chart-box/scripts/sync.py flush \
+  --config /absolute/laptop/box.json --repo orange-v2-backend
 ```
 
-Setup writes `~/.config/chart-box/box.json`, with the box/SSH target, discovered
+Setup writes the selected config (default `~/.config/chart-box/box.json`), with the
+box/SSH target, discovered
 laptop paths, `/srv/chart/source/<repo>` destinations and owned session IDs. A
 separate `--config` supports another box. New sessions start paused. Setup refuses
 source overlap with other Mutagen sessions or discoverable Syncthing folders,
 and refuses existing included source at a fresh destination. Sessions from other
 workflows require deliberate migration; do not reuse their paths implicitly.
-Inspect prior sessions only if present; if already retired, cite their recorded
-disposition instead of recreating their mapping or running retirement again.
+Operate only on existing sessions owned by the selected mapping.
 
 New ordinary files (for example `src/feature.ts`) sync immediately without
 `git add` or a commit. Only the private-pattern exception depends on Git tracking.
@@ -74,8 +77,7 @@ included. The helper does not inspect their contents or decide whether the repo
 should commit them. Ignored box-side paths are retained. Symlinks are not mirrored.
 The helper has no per-repo extra-ignore setting. Inspect its policy before pairing;
 record accepted repository noise rather than editing a shared policy mid-session.
-Source files were observed as `0600 root` in acceptance. The helper sets no mode
-override; choose and verify permissions explicitly before using a non-root runtime.
+The helper sets no file-mode override; choose and verify permissions explicitly before using a non-root runtime.
 
 Tracked exceptions are captured at setup/refresh because Mutagen's ignore policy
 is fixed per session. **Pause before changing tracking status or switching branches
@@ -152,12 +154,11 @@ Reference Mongo/Dragonfly shape:
 - Retain a `mongo/member-0` directory on HDD if adding members later is useful.
   Select the repository's compatible Mongo version and explicit cache tuning.
 - Set Mongo's soft/hard `nofile` ceiling to 64000 and check the running process.
-  The inherited 1024 ceiling failed during the chart applications' schema setup.
   This file-descriptor ceiling does not reserve memory or set a CPU/memory limit.
 - Dragonfly can use `/data` on HDD with a developer-selected snapshot policy and
   password. Stop/snapshot behavior belongs to that Compose project.
-- The accepted unprivileged box rejects unlimited `memlock`; omit that ulimit
-  rather than granting host privileges. Dragonfly can fall back from io_uring to
+- Omit unlimited `memlock` in unprivileged boxes; do not grant host privileges
+  to satisfy a Compose ulimit. Dragonfly can fall back from io_uring to
   epoll. Check actual authenticated protocol health as well as container status.
 - Publish Docker ports on `127.0.0.1` for box-local access. Use the
   [Tailscale socket example](reference/tailnet-tcp.md) for laptop access without
@@ -181,9 +182,19 @@ services:
     ulimits:
       nofile: {soft: 64000, hard: 64000}
     volumes:
-      - /srv/chart/data/my-project/mongo/member-0:/data/db
-      - /srv/chart/data/private/mongo-keyfile:/run/mongo-keyfile:ro
+      - type: bind
+        source: /srv/chart/data/my-project/mongo/member-0
+        target: /data/db
+        bind: {create_host_path: false}
+      - type: bind
+        source: /srv/chart/data/private/mongo-keyfile
+        target: /run/mongo-keyfile
+        read_only: true
+        bind: {create_host_path: false}
 ```
+
+Required bind sources use `create_host_path: false` so a missing path fails
+instead of creating an empty database directory.
 
 This fragment requires prepared keyfile/users and replica initialization; it is
 not a complete unattended bootstrap. The developer's agent supplies the matching
@@ -192,6 +203,19 @@ For native box-local apps and loopback-published Mongo, a member address of
 `127.0.0.1:27017` supports replica-set discovery; laptop clients use
 `directConnection=true`. Containerized app clients need a member address reachable
 from their own network namespace. Do not copy a topology's address blindly.
+
+For Dragonfly images with `redis-cli`, use authenticated protocol health rather
+than assuming the bundled `nc` supports `-z`. This Compose fragment reads a
+container environment variable without printing it; adapt its name to the stack:
+
+```yaml
+healthcheck:
+  test: ["CMD-SHELL", 'REDISCLI_AUTH="$$DFLY_requirepass" redis-cli --raw PING | grep -qx PONG']
+  interval: 10s
+  timeout: 5s
+  retries: 3
+  start_period: 10s
+```
 
 Run backends natively in the mirrored checkout with `pnpm install` and its own
 `pnpm dev` command. Discover service dependencies/ports. Choose a developer-owned
@@ -206,9 +230,7 @@ restart path and application retry behavior. Retain copies of developer units
 under `/srv/chart/data/private/systemd/` for HDD backup; `/etc/systemd/system`
 alone is outside its scope.
 
-Boxes have normal Internet egress and developer-owned keys. Live integration work
-is the developer's responsibility, as on their laptop. The shared k3s restrictions
-remain separate. Host private-network restrictions and tailnet ACLs still apply.
+Access and egress boundaries are defined in [architecture](ARCHITECTURE.md#network-and-access-boundary).
 
 ## 6. Import an existing Mongo dump
 
@@ -240,13 +262,14 @@ infrastructure dataset registry or adoption CLI.
 3. Reinstall dependencies in the box after dependency changes, following the repo.
 4. Run Vite locally with its API proxy aimed at `http://<box>:3000` (or the chosen
    backend port). Plain HTTP over Tailscale is the development default; HTTPS is separate.
+   A localhost frontend and the remote API have separate browser security contexts;
+   verify CORS, cookies and login against the actual frontend origin.
    For kiyotaka-frontend, inspect `VITE_BACKEND_DOMAIN` and
    `VITE_CME_SNAPSHOT_PROXY_TARGET` in its current configuration. Preserve old values
    before switching. General Tailscale HTTPS needs the tailnet admin's setting.
 5. Verify hot reload, login (including the repository's dev email-code flow), and
    workspace save/reload. Those are application checks performed by the developer.
-   Sign in using an identity from the chosen data source; pilot fixture users are
-   not expected in a developer's own dump.
+   Sign in using an identity from the chosen data source.
 
 For restart acceptance, coordinate a brief interruption and run `systemctl reboot`
 inside the developer's own box. Verify a changed boot ID, SSH, service readiness,

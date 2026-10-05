@@ -5,105 +5,59 @@ description: Work on chart backends in a developer's remote personal box, includ
 
 # Personal chart box
 
-The laptop owns the source and runs the coding agent. The personal Incus box runs
-projects, tests and databases. Mutagen mirrors each registered checkout one way
-into `/srv/chart/source/<repo>`. The developer is root in the box and owns its
-applications. Host/image administration belongs to the operator.
+The coding agent and source checkouts live on the laptop. Mutagen mirrors selected
+repositories into the personal box; SSH runs remote commands. The developer owns
+applications inside the box; host/image/recovery work belongs to the operator.
 
-## Establish the target
+## Select the target
 
-Use the user's explicit mapping path first. Otherwise inspect
-`~/.config/chart-box/box.json` and regular `~/.config/chart-box/*.json` files;
-match the recorded box/repository to the task. Ask which target to use if multiple
-mappings match. Do not create a replacement just because `box.json` is absent.
-The mapping records `box`, `ssh`,
-`source_root`, `repos` (absolute laptop path to destination name) and `sessions`
-(destination name to owned session ID). Use its explicit `--config` if the
-user selected another box. Pass the chosen `--config` on every helper invocation;
-the helper does not auto-discover mappings and refuses symlinked config paths.
-For a first single-box setup, prefer `box.json`. If no mapping exists,
-follow the [developer guide](../../incus/DEVELOPER.md) with operator-supplied SSH
-host-key fingerprint and developer-selected checkout paths.
+Use the user's explicit mapping, otherwise inspect regular
+`~/.config/chart-box/*.json` files and match the box/repository. Resolve ambiguity
+before acting; do not create a new mapping just because `box.json` is absent.
+Mappings contain `box`, `ssh`, `source_root`, `repos` and `sessions`. Discover
+absolute checkout paths and pass the selected `--config` on every helper call.
+Config symlinks are refused. Preserve unrelated Mutagen/Syncthing sessions.
 
-This skill's `scripts/sync.py` is the laptop helper. Keep its sibling `policy.py`.
-Invoke it with Python 3.11+ and Mutagen 0.18.1. Preserve sessions outside the
-selected mapping; do not migrate or terminate them implicitly.
+Read [developer setup and daily use](../../incus/DEVELOPER.md) for pairing,
+exclusions, private env/key import, runtimes, databases, dump adoption and recovery.
+Keep this skill with its `scripts/sync.py`, `policy.py` and linked guide. The helper
+requires Python 3.11+ and Mutagen 0.18.1 on the laptop.
 
-## Flush before remote work
+## Work from the laptop
 
-Before any remote test, startup or inspection that depends on edits, flush the
-relevant session through the helper and require success, then run over recorded
-SSH. For a recorded Orange checkout, adapt the repository's actual test command:
+Edit mirrored source only on the laptop. Private configuration and generated
+Linux dependencies may be maintained inside the box. Ordinary new source files
+sync without a commit; tracked private-pattern files are not content-scanned.
+Pause before changing their tracked status, then refresh/resume/flush according
+to the developer guide. Never switch to one-way-replica to erase a conflict.
+
+Before remote tests, startup or inspection depending on edits, flush each affected
+repository through the helper and require matching fingerprints:
 
 ```sh
-python3 <skill-directory>/scripts/sync.py flush --config <selected-config> --repo orange-v2-backend
-ssh <recorded-ssh-target> 'bash -lc "cd /srv/chart/source/orange-v2-backend; . /opt/nvm/nvm.sh; nvm use; pnpm test"'
+python3 <skill-directory>/scripts/sync.py flush --config <mapping> --repo <repo>
+ssh <recorded-ssh-target> '<project-specific command>'
 ```
 
-For cross-repository changes, flush each affected repo before executing dependent
-tests. Flushing verifies included content; it does not make several repositories
-an atomic update or wait for application readiness. Inspect the application's
-ready signal separately. Record the box and command used in test results.
+A raw Mutagen flush does not prove matching content. Cross-repository flushes are
+not an atomic snapshot and do not prove application readiness. Use each repository's
+instructions and record the target and actual command. Load `/opt/nvm/nvm.sh`
+explicitly in noninteractive SSH and select project-required runtime versions.
 
-## Run and debug projects
+## Operate and diagnose
 
-Read the repositories' instructions and package scripts. Discover the developer's
-supervisor, service names, logs, ports and working directories over SSH. Do not
-assume Docker, a universal box CLI or systemd unit exists for an application.
-For a recorded unit, use `journalctl -u <unit>` and `systemctl restart <unit>`;
-for a developer-owned Compose project, use its actual `docker compose logs` and
-restart commands. Adding another database/service is developer work inside the
-box; it does not require an infrastructure application feature.
+Discover the developer's supervisor, paths, ports and log locations. Use its
+actual restart/test commands; no universal application CLI or service names are
+provided. The chart API convention is `http://<box>:3000`, with project overrides.
+Database credentials stay private; follow the guide for Compass and dump imports.
+Never infer permission to drop data from a request to import a dump.
 
-Load `/opt/nvm/nvm.sh` explicitly in noninteractive commands; select the version
-required by `.nvmrc` or repository guidance. Install Linux dependencies in the box.
-Reinstall after lockfile/tool changes as the repository requires. Source and
-node_modules use the registered root pool; durable data belongs under
-`/srv/chart/data` on HDD. Rootfs storage on HDD does not extend nightly backup coverage.
+For missing edits, inspect owned-session status, pause/connectivity/errors and
+conflicts first; then flush and compare content before inspecting watcher logs.
+Do not delete the remote tree to force convergence. Use helper setup/status/pause/
+resume/flush/refresh for ordinary session management.
 
-Compass/mongosh can use `<box>:27017` when the developer publishes Mongo there.
-Use `directConnection=true`, the actual authentication database and privately
-supplied credentials. Never print connection passwords. For dump adoption,
-inspect versions/namespaces, preserve the original archive, copy over SCP and
-restore using the [agent procedure](../../incus/DEVELOPER.md#6-import-an-existing-mongo-dump).
-Do not infer permission to drop existing data from an import request.
-
-The chart API convention is `http://<box>:3000`; discover project overrides. Vite
-can stay on the laptop. Box timezone follows the host; inspect it rather than
-assuming UTC. Box egress is normal Internet access with developer-owned keys.
-Shared k3s capture restrictions do not govern personal-box application work.
-
-## Source and private files
-
-Edit mirrored source only on the laptop; there is no Git checkout in the box.
-Create/edit private config and generated dependencies in the box as needed.
-New ordinary source files sync without staging or committing.
-`.git`, node_modules, build output and caches stay excluded. Untracked secret-pattern
-files are excluded, except sample/example templates. Tracked files are included
-without content inspection. Do not assume a tracked credential stays laptop-local.
-
-Use helper `setup`, `status`, `pause`, `resume`, `flush` and `refresh`; do not create,
-terminate or reconfigure its sessions manually. Default one-way-safe preserves
-conflicting remote edits. Preserve unrelated Mutagen/Syncthing sessions.
-
-Before changing tracked status of private-pattern paths or switching a branch
-that changes them, pause the session and run `refresh`, then resume/flush. Ignore
-rules are snapshots, not a live Git-index filter. The helper detects mismatch on
-resume/flush and pauses; it cannot retroactively undo transfer through an old
-tracked exception. Ordinary source edits do not need refresh.
-
-## When something is wrong
-
-For "my change isn't showing," run `status` first. Check paused/disconnected state,
-conflicts and policy-refresh requirements; resolve those before watcher debugging.
-A failed flush or fingerprint mismatch is not a passed test prerequisite. Preserve
-both sides of conflicts; never use one-way-replica or delete the remote tree to
-force convergence. After flush succeeds, inspect the process's actual source path,
-watcher logs and readiness.
-
-A stopped box or host-storage failure goes to the operator. Recreation preserves
-HDD identity/data but gives an empty source/dependency environment. Coordinate
-paused sessions and reinstall tooling/config rather than assuming source is still
-there. Nightly backups cover only HDD data and stop the box briefly; manually
-started apps need the developer's own startup policy. Follow the developer guide
-for first setup and the operator for host/image/recovery work.
+A stopped box or unavailable host storage goes to the operator. Recreation keeps
+HDD data/identity but clears rootfs source/dependencies. Coordinate paused sync
+and application restoration. Nightly coverage is the data attachment only;
+developers own startup behavior after a box restart.

@@ -1,38 +1,20 @@
 # Chart infrastructure
 
-Chart-infra supplies personal Ubuntu 26.04 Incus boxes, Tailscale connectivity,
-laptop-to-box Mutagen sync and retained HDD backup tools. Developers edit
-repositories and run agents on laptops; their agents configure and operate
-applications as root inside their own unprivileged boxes. Source and dependencies
-use the box’s registered root pool; retained data belongs under `/srv/chart/data`
-on HDD. Backups remain on SSD/NVMe.
+Personal Ubuntu development boxes with Tailscale access, laptop-to-box Mutagen
+sync and retained HDD data. Developers own application setup; operators own the
+host foundation and box lifecycle.
 
-The bare image contains generic development tools. Application versions,
-environment files, dependencies, startup and data belong to each developer.
-Host administration belongs to the operator.
-
-## Start here
-
-| Task | Guide |
+| Task | Read |
 | --- | --- |
-| Understand the whole setup: instances, networking, storage, volumes and backups | [Architecture and storage map](incus/ARCHITECTURE.md) |
-| Prepare the Ubuntu 26.04 host, networking and storage | [Incus preparation](incus/README.md) |
-| Inspect root-pool placement and backup coverage | [Storage placement](incus/STORAGE.md) |
-| Build and accept an image, create/recreate boxes, schedule backups | [Image and lifecycle](incus/IMAGES.md) |
-| Set up projects, private configuration and databases | [Developer-agent guide](incus/DEVELOPER.md) |
-| Sync source, run remote tests and inspect applications | [Chart-box skill](skills/chart-box/SKILL.md) |
-| Operate the host, images and recovery tools | [Chart-infra skill](skills/chart-infra/SKILL.md) |
-| Find deployed endpoints, evidence, retained artifacts and remaining work | [Chart Infra knowledge base](/home/sean/obsidian/vault/Chart%20Infra/INDEX.md) |
+| Understand storage, networking, responsibility and backup coverage | [Architecture](incus/ARCHITECTURE.md) |
+| Prepare the host, build images, create/recreate boxes and manage backups | [Operator guide](incus/README.md) |
+| Set up repositories, private configuration, databases and daily development | [Developer-agent guide](incus/DEVELOPER.md) |
+| Route host/image/recovery work | [Chart-infra skill](skills/chart-infra/SKILL.md) |
+| Sync code and operate applications from a laptop agent | [Chart-box skill](skills/chart-box/SKILL.md) |
+| Find deployed endpoints, recovery locations and open work | [Environment knowledge base](/home/sean/obsidian/vault/Chart%20Infra/INDEX.md) |
 
-Use `incus/prep.py` for host preparation/status, `incus/image.py` for image
-build/acceptance, `incus/boxes.py` for creation/recreation, and `incus/backup.py`
-for backup enrollment, copies and restore checks. Read the linked procedures and
-review the plan before `--apply`. Host mutations require operator sudo.
-
-The repository owns reusable code and operating instructions. The Obsidian
-knowledge base owns installation-specific facts, investigations, evidence and
-plans. Retained k3s deployments, historical pilot data, the Go pipeline and
-unrelated host services are outside these tools. Preserve their resources.
+Read [AGENTS.md](AGENTS.md) before changes. This repository owns reusable code and
+procedures. The environment knowledge base owns installation facts and open plans.
 
 ## Development checks
 
@@ -46,7 +28,6 @@ python3 tests/syslog.py
 bash -n incus/bare-base.sh incus/bare-identity.sh incus/guest-firewall.sh
 ```
 
-The `tests/*_live.py` checks contact machines or create fixtures. Read
-[image acceptance](incus/IMAGES.md) and the selected test before running one;
-never substitute a developer's working box for a disposable test target.
-Read [AGENTS.md](AGENTS.md) before modifying this project.
+`tests/*_live.py` contacts machines or creates fixtures. Read the
+[acceptance procedures](incus/README.md#test-image-recovery) and selected test before
+execution. Never substitute a working developer box for a disposable fixture.
