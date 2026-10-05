@@ -18,7 +18,9 @@ procedures. The environment knowledge base owns installation facts and open plan
 
 ## Development checks
 
-These standard-library checks use local fixtures without deploying workloads:
+These standard-library checks use local fixtures without deploying workloads.
+They require Python 3, `gcc`, Bash and `ssh-keygen`; the boundary suite compiles
+its TCP fixture locally:
 
 ```sh
 python3 tests/incus_prep.py

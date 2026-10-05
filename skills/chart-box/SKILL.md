@@ -1,13 +1,17 @@
 ---
 name: chart-box
-description: Work on chart backends in a developer's remote personal box, including auth-service-backend, tharamine-user-service, orange-v2-backend and their databases. Use for backend tests, process startup/restarts/logs, checking hot reload, missing edits, Mongo/Dragonfly connections, dump import/export, adding repositories to sync, and SSH/Mutagen operations for these boxes. Read the laptop mapping before assuming where code, ports, logs or data live; exclude unrelated SSH and synchronization work.
+description: Develop and operate projects in a personal chart-infra box through laptop-owned source, Mutagen and SSH. Use for repository pairing, remote builds/tests, service startup/logs, hot reload, sync diagnosis and project databases. Any repository or application stack is supported; read the laptop mapping before choosing paths, ports or commands. Exclude unrelated SSH/sync work and host administration.
 ---
 
 # Personal chart box
 
-The coding agent and source checkouts live on the laptop. Mutagen mirrors selected
+Codex and Claude Code use the same helper and SSH commands. The coding agent and
+source checkouts live on the laptop. Mutagen mirrors selected
 repositories into the personal box; SSH runs remote commands. The developer owns
 applications inside the box; host/image/recovery work belongs to the operator.
+Boxes can host any developer-selected repositories and services. Discover each
+project's language, tooling and dependencies from its own instructions; Node,
+Mongo and chart-backend examples in the guide are optional application patterns.
 
 ## Select the target
 
@@ -41,15 +45,17 @@ ssh <recorded-ssh-target> '<project-specific command>'
 
 A raw Mutagen flush does not prove matching content. Cross-repository flushes are
 not an atomic snapshot and do not prove application readiness. Use each repository's
-instructions and record the target and actual command. Load `/opt/nvm/nvm.sh`
-explicitly in noninteractive SSH and select project-required runtime versions.
+instructions and record the target and actual command. For Node projects, load
+`/opt/nvm/nvm.sh` explicitly in noninteractive SSH and select project-required
+runtime versions.
 
 ## Operate and diagnose
 
 Discover the developer's supervisor, paths, ports and log locations. Use its
 actual restart/test commands; no universal application CLI or service names are
-provided. The chart API convention is `http://<box>:3000`, with project overrides.
-Database credentials stay private; follow the guide for Compass and dump imports.
+provided. Use the project's configured endpoints; the chart API example uses
+`http://<box>:3000`. Database credentials stay private; the guide includes Mongo
+Compass and dump-import examples.
 Never infer permission to drop data from a request to import a dump.
 
 For missing edits, inspect owned-session status, pause/connectivity/errors and

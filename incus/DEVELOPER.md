@@ -4,6 +4,9 @@ A personal box is a Linux development machine. The developer is root inside it;
 the operator owns the host, network boundary, OS image and HDD backups. Discover
 project setup from each repository's README/agent instructions. Reference examples
 below are starting points, not an enforced application contract.
+Any repository or application stack may run in the box. The Node, Mongo and chart
+frontend examples apply only to projects using those tools; discover other runtimes
+and service requirements from the selected repository.
 
 Before setup, inspect existing mappings/sessions and collect unresolved choices
 with the developer: checkout paths and wanted exclusions; data source and actual
@@ -29,13 +32,27 @@ The guest inherits host timezone.
 
 Obtain the reviewed `skills/chart-box/` directory from chart-infra, including its
 scripts and this guide. Keep a local chart-infra checkout or an equivalent bundle
-with working relative links. Symlink the skill into the agent's existing skills
-directory without replacing an unrelated installation:
+with working relative links. Install for the agent used on that laptop, or both.
+Preserve any existing `chart-box` installation; inspect it before replacing it.
+
+Codex:
 
 ```sh
+mkdir -p ~/.codex/skills
 ln -s /absolute/chart-infra/skills/chart-box ~/.codex/skills/chart-box
-# For Claude Code, use ~/.claude/skills/chart-box instead.
 ```
+
+Claude Code:
+
+```sh
+mkdir -p ~/.claude/skills
+ln -s /absolute/chart-infra/skills/chart-box ~/.claude/skills/chart-box
+```
+
+Both agents use the same `SKILL.md`, Python helper, mapping and SSH commands.
+No Codex-specific execution tool is required. Claude Code supports personal skills
+and symlinked skill directories as described in its
+[skill documentation](https://code.claude.com/docs/en/skills).
 
 The helper needs Python 3.11+ and Mutagen 0.18.1 on the laptop. Do not replace
 unrelated Mutagen sessions or daemon-login preferences. Discover every checkout's
