@@ -64,6 +64,34 @@ a failed stop or force it off. The receipt saves partial file measurements befor
 Docker checks, identifies the failed step, and records cleanup errors separately
 from the original failure. A partial measurement is not a passed trial.
 
+### Syslog shutdown experiment
+
+`tests/storage_syslog_live.py` tests an rsyslog `NonBlocking=yes` service drop-in
+on the retained HDD fixture of an existing trial. Use it only after diagnosing
+PID 1 blocked in `flush_fd()` on the blocking `/run/systemd/journal/syslog` socket.
+It checks original trial identity and exact fixture devices/configuration before
+mutation. Plan mode prints scope without contacting privileged Incus state:
+
+```sh
+python3 tests/storage_syslog_live.py --config "$CHART_HOST_CONFIG" --trial "$CHART_TRIAL"
+sudo python3 tests/storage_syslog_live.py --config "$CHART_HOST_CONFIG" --trial "$CHART_TRIAL" --apply
+```
+
+Apply saves the guest journal and file measurements to
+`/var/lib/chart-incus/storage-trials/<trial>/syslog-experiment.json`, installs
+`/etc/systemd/system/rsyslog.service.d/chart-storage-nonblocking.conf` inside that
+fixture, and force-stops it once to recover the stuck PID 1. It then tests three
+boot/graceful-stop cycles, the actual nonblocking socket flag, rsyslog file
+delivery, Docker execution and synthetic-file retention. It retains the fixture
+and both receipts. A failed graceful stop has no force-stop fallback.
+
+The experiment changes neither the published image nor developer boxes, host
+AppArmor policy or the original trial result. Successful cycles support the
+workaround on the modified fixture; image acceptance and storage migration remain
+separate checks. `NonBlocking=yes` controls socket-activation descriptor flags;
+it does not grant rsyslog permission to receive signals under AppArmor.
+[systemd service configuration](https://github.com/systemd/systemd/blob/v259/man/systemd.service.xml)
+
 Timings are synthetic and affected by filesystem caches and other host workloads.
 They establish neither cold dependency-install performance nor application hot
 reload latency. Application startup, source sync and representative dependency

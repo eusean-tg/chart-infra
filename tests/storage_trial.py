@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'incus'))
 spec = importlib.util.spec_from_file_location('trial', ROOT / 'incus/storage_trial.py')
 t = importlib.util.module_from_spec(spec); spec.loader.exec_module(t)
+spec = importlib.util.spec_from_file_location('syslog_trial', ROOT / 'tests/storage_syslog_live.py')
+s = importlib.util.module_from_spec(spec); spec.loader.exec_module(s)
 
 
 class StorageTrial(unittest.TestCase):
@@ -142,6 +144,97 @@ class StorageTrial(unittest.TestCase):
             self.assertEqual(saved['phase'], 'docker-build-run')
             self.assertEqual(saved['instance'], 'fixture')
             self.assertEqual(saved['results'], record['results'])
+
+
+class SyslogExperiment(unittest.TestCase):
+    @contextlib.contextmanager
+    def fixture(self):
+        with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+            root = Path(directory)
+            c = json.loads((ROOT / 'incus/host.example.json').read_text())
+            c.update(machine_id='a' * 32, hdd_mount=str(root / 'hdd'))
+            name = s.t.trial_names('trial1')[1]
+            original = dict(owner=s.t.OWNER, host=c['machine_id'], trial='trial1', pool='hdd',
+                            source=str(s.t.target(c)), image='b' * 64)
+            proof = root / 'storage-trials/trial1/proof.json'
+            s.h.save(proof, original)
+            live = s.t.fixture_spec(c, name, 'hdd', original['image'], 'trial1')
+            live['config']['volatile.base_image'] = original['image']
+            live['status'] = 'Running'
+            for obj, method in ((s.h, 'host'), (s.h, 'candidate'), (s.h, 'wait_ready'),
+                                (s.t, 'validate_pool'), (s.p, 'query')):
+                stack.enter_context(patch.object(obj, method))
+            stack.enter_context(patch.object(s.p, 'STATE', root))
+            stack.enter_context(patch.object(s.h, 'instance', side_effect=lambda *_: live))
+            def command(args, **kwargs):
+                if 'stop' in args: live['status'] = 'Stopped'
+                if 'start' in args: live['status'] = 'Running'
+                return ''
+            run = stack.enter_context(patch.object(s.p, 'run', side_effect=command))
+            def guest(c, name, args):
+                if args[0] == 'cat' or (args[0] == 'python3' and args[2] == s.CHECK):
+                    return json.dumps({'sha256': 'fixture-hash', 'syslog_fd_flags': ['0o2004002']})
+                return 'fixture-output'
+            guest_mock = stack.enter_context(patch.object(s, 'guest', side_effect=guest))
+            yield c, proof, live, run, guest_mock
+
+    def test_data_attachment_refuses_experiment(self):
+        with self.fixture() as (c, proof, live, run, guest):
+            live['devices']['data'] = {'type': 'disk', 'source': '/private', 'path': '/data'}
+            with self.assertRaisesRegex(RuntimeError, 'devices'): s.execute(c, 'trial1')
+            run.assert_not_called(); guest.assert_not_called()
+
+    def test_foreign_receipt_refused(self):
+        with self.fixture() as (c, proof, live, run, guest):
+            original = json.loads(proof.read_text()); original['host'] = 'other'
+            s.h.save(proof, original)
+            with self.assertRaisesRegex(RuntimeError, 'identity'): s.execute(c, 'trial1')
+            run.assert_not_called(); guest.assert_not_called()
+
+    def test_existing_experiment_refuses_retry(self):
+        with self.fixture() as (c, proof, live, run, guest):
+            proof.with_name('syslog-experiment.json').write_text('{}')
+            with self.assertRaisesRegex(RuntimeError, 'receipt exists'): s.execute(c, 'trial1')
+            run.assert_not_called(); guest.assert_not_called()
+
+    def test_success_retains_fixture_and_original_receipt(self):
+        with self.fixture() as (c, proof, live, run, guest), contextlib.redirect_stdout(io.StringIO()):
+            original = proof.read_bytes()
+            s.execute(c, 'trial1')
+            calls = [call.args[0] for call in run.call_args_list]
+            self.assertEqual(sum('--force' in cmd for cmd in calls), 1)
+            self.assertEqual(sum('--timeout' in cmd for cmd in calls), 3)
+            self.assertTrue(all('local:' + live['name'] in cmd for cmd in calls))
+            self.assertFalse(any('delete' in cmd for cmd in calls))
+            self.assertEqual(proof.read_bytes(), original)
+            for call in guest.call_args_list:
+                args = call.args[2]
+                if args[:2] == ['python3', '-c']:
+                    compile(args[2], '<guest-script>', 'exec')
+            self.assertEqual(live['status'], 'Stopped')
+            report = json.loads(proof.with_name('syslog-experiment.json').read_text())
+            self.assertEqual(len(report['cycles']), 3)
+
+    def test_failed_graceful_stop_has_no_force_fallback(self):
+        with self.fixture() as (c, proof, live, run, guest):
+            normal = run.side_effect
+            def command(args, **kwargs):
+                if '--timeout' in args: raise RuntimeError('stop timed out')
+                return normal(args, **kwargs)
+            run.side_effect = command
+            with self.assertRaisesRegex(RuntimeError, 'stop timed out'): s.execute(c, 'trial1')
+            self.assertEqual(sum('--force' in call.args[0] for call in run.call_args_list), 1)
+            report = json.loads(proof.with_name('syslog-experiment.json').read_text())
+            self.assertEqual(report['failed_step'], 'graceful-stop-1')
+            self.assertEqual(live['status'], 'Running')
+
+    def test_plan_does_not_execute(self):
+        argv = ['storage_syslog_live.py', '--config', '/fixture.json', '--trial', 'trial1']
+        with patch.object(sys, 'argv', argv), patch.object(s.p, 'config', return_value={}), \
+             patch.object(s.p, 'check_host'), patch.object(s, 'execute') as execute, \
+             contextlib.redirect_stdout(io.StringIO()) as out:
+            s.main(); execute.assert_not_called()
+            self.assertFalse(json.loads(out.getvalue())['apply'])
 
 
 if __name__ == '__main__': unittest.main()
